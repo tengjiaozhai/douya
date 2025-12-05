@@ -1,0 +1,8 @@
+spring:
+    ai:
+        dashscope:
+            api-key: sk-1f612002f98343a6891a6bf27100b282
+
+feishu:
+    app-id: cli_a9b893b544381cb2
+    app-secret: StlKaIG84tfKSSowPsYTIdSH05oHlY4t
