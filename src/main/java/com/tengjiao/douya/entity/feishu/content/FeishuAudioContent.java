@@ -1,6 +1,7 @@
 package com.tengjiao.douya.entity.feishu.content;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.gson.annotations.SerializedName;
 import lombok.Data;
 
 /**
@@ -14,7 +15,7 @@ public class FeishuAudioContent {
     /**
      * 文件唯一标识
      */
-    @JsonProperty("file_key")
+    @SerializedName("file_key")
     private String fileKey;
 
     /**

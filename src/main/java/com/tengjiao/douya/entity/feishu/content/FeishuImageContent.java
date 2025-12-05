@@ -1,6 +1,7 @@
 package com.tengjiao.douya.entity.feishu.content;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.gson.annotations.SerializedName;
 import lombok.Data;
 
 /**
@@ -14,6 +15,6 @@ public class FeishuImageContent {
     /**
      * 图片唯一标识
      */
-    @JsonProperty("image_key")
+    @SerializedName("image_key")
     private String imageKey;
 }

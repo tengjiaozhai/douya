@@ -24,6 +24,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 /**
  * 飞书 WebSocket 长连接配置
@@ -59,14 +60,17 @@ public class FeishuConfig {
                 public void handle(P2MessageReceiveV1 event) throws Exception {
                     String json = Jsons.DEFAULT.toJson(event.getEvent());
                     FeishuMessageEvent feishuMessageEvent = Jsons.DEFAULT.fromJson(json, FeishuMessageEvent.class);
-                    String content = feishuMessageEvent.getMessage().getContent();
-                    String messageType = feishuMessageEvent.getMessage().getMessageType();
-                    log.info("[Feishu] 私聊消息内容: {}", content);
+                    FeishuMessageEvent.Message message = feishuMessageEvent.getMessage();
+                    String content = message.getContent();
+                    String messageType = message.getMessageType();
+                    log.info("[Feishu] 私聊消息内容: {}", message);
                     switch (messageType){
                         case "text" -> {
                             FeishuTextContent feishuTextContent = Jsons.DEFAULT.fromJson(content, FeishuTextContent.class);
                             String response = eatingMasterApp.ask(feishuTextContent.getText());
-                            FeishuMessageSendRequest request = new FeishuMessageSendRequest();
+                            String uuid = UUID.randomUUID().toString();
+                            FeishuMessageSendRequest request = new FeishuMessageSendRequest("user_id",feishuMessageEvent.getSender().getSenderId().getUserId(),
+                                response,uuid);
                             feishuService.sendMessage(messageType,
                                 request);
                         }

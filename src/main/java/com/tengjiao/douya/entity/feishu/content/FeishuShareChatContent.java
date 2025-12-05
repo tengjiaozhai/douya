@@ -1,6 +1,7 @@
 package com.tengjiao.douya.entity.feishu.content;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.gson.annotations.SerializedName;
 import lombok.Data;
 
 /**
@@ -14,6 +15,6 @@ public class FeishuShareChatContent {
     /**
      * 群 ID
      */
-    @JsonProperty("chat_id")
+    @SerializedName("chat_id")
     private String chatId;
 }

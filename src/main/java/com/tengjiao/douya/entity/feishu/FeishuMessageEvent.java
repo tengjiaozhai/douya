@@ -1,6 +1,7 @@
 package com.tengjiao.douya.entity.feishu;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.gson.annotations.SerializedName;
 import lombok.Data;
 import lombok.ToString;
 
@@ -32,19 +33,19 @@ public class FeishuMessageEvent {
         /**
          * 发送者 ID
          */
-        @JsonProperty("sender_id")
+        @SerializedName("sender_id")
         private UserId senderId;
 
         /**
          * 消息发送者类型。目前只支持用户(user)发送的消息。
          */
-        @JsonProperty("sender_type")
+        @SerializedName("sender_type")
         private String senderType;
 
         /**
          * tenant key
          */
-        @JsonProperty("tenant_key")
+        @SerializedName("tenant_key")
         private String tenantKey;
     }
 
@@ -53,19 +54,19 @@ public class FeishuMessageEvent {
         /**
          * 用户的 union id
          */
-        @JsonProperty("union_id")
+        @SerializedName("union_id")
         private String unionId;
 
         /**
          * 用户的 user id
          */
-        @JsonProperty("user_id")
+        @SerializedName("user_id")
         private String userId;
 
         /**
          * 用户的 open id
          */
-        @JsonProperty("open_id")
+        @SerializedName("open_id")
         private String openId;
     }
 
@@ -74,56 +75,56 @@ public class FeishuMessageEvent {
         /**
          * 消息 ID
          */
-        @JsonProperty("message_id")
+        @SerializedName("message_id")
         private String messageId;
 
         /**
          * 根消息 ID
          */
-        @JsonProperty("root_id")
+        @SerializedName("root_id")
         private String rootId;
 
         /**
          * 父消息 ID
          */
-        @JsonProperty("parent_id")
+        @SerializedName("parent_id")
         private String parentId;
 
         /**
          * 消息发送时间（毫秒）
          */
-        @JsonProperty("create_time")
+        @SerializedName("create_time")
         private String createTime;
 
         /**
          * 消息更新时间（毫秒）
          */
-        @JsonProperty("update_time")
+        @SerializedName("update_time")
         private String updateTime;
 
         /**
          * 消息所在的群组 ID
          */
-        @JsonProperty("chat_id")
+        @SerializedName("chat_id")
         private String chatId;
 
         /**
          * 消息所属的话题 ID
          */
-        @JsonProperty("thread_id")
+        @SerializedName("thread_id")
         private String threadId;
 
         /**
          * 消息所在的群组类型
          * p2p: 单聊, group: 群组
          */
-        @JsonProperty("chat_type")
+        @SerializedName("chat_type")
         private String chatType;
 
         /**
          * 消息类型
          */
-        @JsonProperty("message_type")
+        @SerializedName("message_type")
         private String messageType;
 
         /**
@@ -139,7 +140,7 @@ public class FeishuMessageEvent {
         /**
          * 用户代理数据
          */
-        @JsonProperty("user_agent")
+        @SerializedName("user_agent")
         private String userAgent;
     }
 
@@ -163,7 +164,7 @@ public class FeishuMessageEvent {
         /**
          * tenant key
          */
-        @JsonProperty("tenant_key")
+        @SerializedName("tenant_key")
         private String tenantKey;
     }
 }

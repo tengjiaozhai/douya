@@ -1,6 +1,7 @@
 package com.tengjiao.douya.entity.feishu.content;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.gson.annotations.SerializedName;
 import lombok.Data;
 
 import java.util.List;
@@ -40,29 +41,29 @@ public class FeishuPostContent {
         private String href;
 
         // at 标签的字段
-        @JsonProperty("user_id")
+        @SerializedName("user_id")
         private String userId;
 
-        @JsonProperty("user_name")
+        @SerializedName("user_name")
         private String userName;
 
         // img 标签的字段
-        @JsonProperty("image_key")
+        @SerializedName("image_key")
         private String imageKey;
 
         // media 标签的字段
-        @JsonProperty("file_key")
+        @SerializedName("file_key")
         private String fileKey;
 
         // emotion 标签的字段
-        @JsonProperty("emoji_type")
+        @SerializedName("emoji_type")
         private String emojiType;
 
         // code_block 标签的字段
         private String language;
 
         // text 标签的字段
-        @JsonProperty("un_escape")
+        @SerializedName("un_escape")
         private Boolean unEscape;
     }
 }

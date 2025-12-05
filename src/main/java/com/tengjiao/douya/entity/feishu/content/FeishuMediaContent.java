@@ -1,6 +1,7 @@
 package com.tengjiao.douya.entity.feishu.content;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.gson.annotations.SerializedName;
 import lombok.Data;
 
 /**
@@ -14,19 +15,19 @@ public class FeishuMediaContent {
     /**
      * 文件唯一标识
      */
-    @JsonProperty("file_key")
+    @SerializedName("file_key")
     private String fileKey;
 
     /**
      * 视频封面图片的唯一标识
      */
-    @JsonProperty("image_key")
+    @SerializedName("image_key")
     private String imageKey;
 
     /**
      * 文件名
      */
-    @JsonProperty("file_name")
+    @SerializedName("file_name")
     private String fileName;
 
     /**
