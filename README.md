@@ -87,6 +87,9 @@ douya
     - 接口地址:
       - App Token: `POST /api/douya/feishu/token`
       - Tenant Token: `POST /api/douya/feishu/tenant-token`
+3.  **消息发送**:
+    - 支持发送文本、富文本、卡片等多种类型的消息给指定用户或群组。
+    - 接口地址: `POST /api/douya/feishu/message/send?receive_id_type=open_id`
 
 ## 开发者
 

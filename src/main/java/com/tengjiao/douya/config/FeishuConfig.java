@@ -8,8 +8,15 @@ import com.lark.oapi.event.cardcallback.P2CardActionTriggerHandler;
 import com.lark.oapi.event.cardcallback.P2URLPreviewGetHandler;
 import com.lark.oapi.event.cardcallback.model.*;
 import com.lark.oapi.service.im.ImService;
+import com.lark.oapi.service.im.v1.model.P2ChatAccessEventBotP2pChatEnteredV1;
 import com.lark.oapi.service.im.v1.model.P2MessageReceiveV1;
 import com.lark.oapi.ws.Client;
+import com.tengjiao.douya.app.EatingMasterApp;
+import com.tengjiao.douya.entity.feishu.FeishuMessageEvent;
+import com.tengjiao.douya.entity.feishu.FeishuMessageSendRequest;
+import com.tengjiao.douya.entity.feishu.content.FeishuTextContent;
+import com.tengjiao.douya.service.FeishuService;
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -34,6 +41,10 @@ public class FeishuConfig {
     public FeishuConfig(FeishuProperties feishuProperties) {
         this.feishuProperties = feishuProperties;
     }
+    @Resource
+    private EatingMasterApp eatingMasterApp;
+    @Resource
+    private FeishuService feishuService;
 
     /**
      * 创建飞书 WebSocket 客户端
@@ -46,7 +57,21 @@ public class FeishuConfig {
             .onP2MessageReceiveV1(new ImService.P2MessageReceiveV1Handler() {
                 @Override
                 public void handle(P2MessageReceiveV1 event) throws Exception {
-                    log.info("[Feishu] 收到私聊消息: {}", Jsons.DEFAULT.toJson(event.getEvent()));
+                    String json = Jsons.DEFAULT.toJson(event.getEvent());
+                    FeishuMessageEvent feishuMessageEvent = Jsons.DEFAULT.fromJson(json, FeishuMessageEvent.class);
+                    String content = feishuMessageEvent.getMessage().getContent();
+                    String messageType = feishuMessageEvent.getMessage().getMessageType();
+                    log.info("[Feishu] 私聊消息内容: {}", content);
+                    switch (messageType){
+                        case "text" -> {
+                            FeishuTextContent feishuTextContent = Jsons.DEFAULT.fromJson(content, FeishuTextContent.class);
+                            String response = eatingMasterApp.ask(feishuTextContent.getText());
+                            FeishuMessageSendRequest request = new FeishuMessageSendRequest();
+                            feishuService.sendMessage(messageType,
+                                request);
+                        }
+                    }
+
                 }
             })
             .onCustomizedEvent("out_approval", new CustomEventHandler() {
@@ -78,6 +103,12 @@ public class FeishuConfig {
                     inline.setTitle("链接预览测试fromJavaSDK");
                     resp.setInline(inline);
                     return resp;
+                }
+            })
+            .onP2ChatAccessEventBotP2pChatEnteredV1(new ImService.P2ChatAccessEventBotP2pChatEnteredV1Handler() {
+                @Override
+                public void handle(P2ChatAccessEventBotP2pChatEnteredV1 event) throws Exception {
+                    log.info("[用户进入应用会话], data: {}\n", Jsons.DEFAULT.toJson(event.getEvent()));
                 }
             })
             .build();

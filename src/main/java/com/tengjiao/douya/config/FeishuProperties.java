@@ -33,4 +33,9 @@ public class FeishuProperties {
      * 获取 Tenant Access Token 的 URL
      */
     private String tenantTokenUrl = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal";
+
+    /**
+     * 发送消息的 URL
+     */
+    private String messageSendUrl = "https://open.feishu.cn/open-apis/im/v1/messages";
 }

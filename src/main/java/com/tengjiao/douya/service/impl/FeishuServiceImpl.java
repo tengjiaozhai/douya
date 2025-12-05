@@ -1,9 +1,10 @@
 package com.tengjiao.douya.service.impl;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.tengjiao.douya.config.FeishuProperties;
+import com.tengjiao.douya.entity.feishu.FeishuMessageSendRequest;
+import com.tengjiao.douya.entity.feishu.FeishuMessageSendResponse;
+import com.tengjiao.douya.entity.feishu.FeishuTokenResponse;
 import com.tengjiao.douya.service.FeishuService;
-import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpEntity;
@@ -37,7 +38,7 @@ public class FeishuServiceImpl implements FeishuService {
     // 本地缓存 - Tenant Token
     private volatile String cachedTenantAccessToken;
     private volatile long tenantTokenExpireTime = 0L;
-    
+
     private final ReentrantLock lock = new ReentrantLock();
     private final RestTemplate restTemplate = new RestTemplate();
 
@@ -58,7 +59,7 @@ public class FeishuServiceImpl implements FeishuService {
             }
 
             log.info("开始请求飞书 app_access_token...");
-            
+
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
 
@@ -149,17 +150,40 @@ public class FeishuServiceImpl implements FeishuService {
         }
     }
 
-    @Data
-    private static class FeishuTokenResponse {
-        private int code;
-        private String msg;
+    @Override
+    public FeishuMessageSendResponse sendMessage(String receiveIdType, FeishuMessageSendRequest request) {
+        String tenantToken = getTenantAccessToken();
         
-        @JsonProperty("app_access_token")
-        private String appAccessToken;
-        
-        private int expire;
-        
-        @JsonProperty("tenant_access_token")
-        private String tenantAccessToken;
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set("Authorization", "Bearer " + tenantToken);
+
+        // 构建 URL，添加查询参数
+        String url = feishuProperties.getMessageSendUrl() + "?receive_id_type=" + receiveIdType;
+
+        HttpEntity<FeishuMessageSendRequest> httpEntity = new HttpEntity<>(request, headers);
+
+        try {
+            log.info("发送飞书消息: url={}, request={}", url, request);
+            ResponseEntity<FeishuMessageSendResponse> response = restTemplate.postForEntity(url, httpEntity, FeishuMessageSendResponse.class);
+            
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                FeishuMessageSendResponse respBody = response.getBody();
+                if (respBody.getCode() == 0) {
+                    log.info("发送飞书消息成功: messageId={}", respBody.getData().getMessageId());
+                    return respBody;
+                } else {
+                    log.error("发送飞书消息失败: code={}, msg={}", respBody.getCode(), respBody.getMsg());
+                    throw new RuntimeException("发送飞书消息失败: " + respBody.getMsg());
+                }
+            } else {
+                log.error("请求飞书发送消息接口失败: status={}", response.getStatusCode());
+                throw new RuntimeException("请求飞书发送消息接口失败");
+            }
+        } catch (Exception e) {
+            log.error("发送飞书消息异常", e);
+            throw new RuntimeException("发送飞书消息异常", e);
+        }
     }
+
 }
