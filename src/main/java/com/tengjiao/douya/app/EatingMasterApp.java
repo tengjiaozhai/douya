@@ -32,7 +32,10 @@ public class EatingMasterApp {
           4. 如果需要更多信息，主动询问
 
           保持专业、暴躁、训斥、严厉的语气。
-        """;
+         \s
+          输出规范 \s
+          语言要求：所有回复、思考过程及任务清单，均须使用中文。
+       \s""";
 
     private final ChatModel dashScopeChatModel;
 

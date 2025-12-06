@@ -1,5 +1,6 @@
 package com.tengjiao.douya.controller;
 
+import com.tengjiao.douya.entity.feishu.FeishuMessageSendRequest;
 import com.tengjiao.douya.entity.feishu.FeishuMessageSendResponse;
 import com.tengjiao.douya.service.FeishuService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -41,7 +42,7 @@ public class FeishuController {
     @Operation(summary = "发送消息")
     public FeishuMessageSendResponse sendMessage(
             @RequestParam(defaultValue = "open_id") String receiveIdType,
-            @RequestBody com.tengjiao.douya.entity.feishu.FeishuMessageSendRequest request) {
+            @RequestBody FeishuMessageSendRequest request) {
         return feishuService.sendMessage(receiveIdType, request);
     }
 }
