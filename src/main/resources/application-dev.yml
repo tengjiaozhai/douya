@@ -2,6 +2,11 @@ spring:
     ai:
         dashscope:
             api-key: sk-1f612002f98343a6891a6bf27100b282
+        vectorstore:
+            chroma:
+                client:
+                    host: http://localhost
+                    port:
 
 feishu:
     app-id: cli_a9b893b544381cb2

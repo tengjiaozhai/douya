@@ -3,12 +3,17 @@ package com.tengjiao.douya.app;
 import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatModel;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
+import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingModel;
+import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingOptions;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.embedding.Embedding;
+import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.embedding.EmbeddingOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -38,8 +43,10 @@ public class EatingMasterApp {
        \s""";
 
     private final ChatModel dashScopeChatModel;
+    private final EmbeddingModel dashScopeEmbeddingModel;
+    private final EmbeddingOptions dashScopeEmbeddingOptions;
 
-    public EatingMasterApp(@Value("${spring.ai.dashscope.api-key}") String apiKey) {
+    public EatingMasterApp(@Value("${spring.ai.dashscope.api-key}") String apiKey,EmbeddingModel dashScopeEmbeddingModel) {
         DashScopeApi dashScopeApi = DashScopeApi.builder()
             .apiKey(apiKey)
             .build();
@@ -50,9 +57,13 @@ public class EatingMasterApp {
                 .withMaxToken(1000)
                 .withEnableSearch(true)
                 .withTopP(0.9)
-                .withModel("qwen3-max")
+                .withModel("qwen-plus")
                 .build())
             .build();
+        this.dashScopeEmbeddingOptions = DashScopeEmbeddingOptions.builder()
+                .withModel("qwen2.5-vl-embedding")
+                .build();
+        this.dashScopeEmbeddingModel = dashScopeEmbeddingModel;
     }
 
     public String ask(String message){
