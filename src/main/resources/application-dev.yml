@@ -5,8 +5,9 @@ spring:
         vectorstore:
             chroma:
                 client:
-                    host: http://localhost
-                    port:
+                    host: http://121.43.231.155
+                    port: 8000
+                collection-name: douya
 
 feishu:
     app-id: cli_a9b893b544381cb2
