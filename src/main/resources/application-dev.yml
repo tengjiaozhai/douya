@@ -1,12 +1,12 @@
 spring:
   ai:
     dashscope:
-      api-key: sk-1f612002f98343a6891a6bf27100b282
+      api-key: api-key
       embedding:
         options:
           model: text-embedding-v4
     deepseek:
-        api-key: sk-ece64b17333940239252dcf326f3895e
+        api-key: api-key
     vectorstore:
       chroma:
         client:
@@ -15,5 +15,5 @@ spring:
         collection-name: douya
 
 feishu:
-  app-id: cli_a9b893b544381cb2
-  app-secret: StlKaIG84tfKSSowPsYTIdSH05oHlY4t
+  app-id: app-id
+  app-secret: app-secret
