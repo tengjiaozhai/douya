@@ -2,7 +2,7 @@ spring:
   application:
     name: douya
   profiles:
-    active: dev
+    active: local
   ai:
     chat:
         observations:
@@ -14,6 +14,11 @@ spring:
     vectorstore:
       observations:
           log-query-response: true
+    deepseek:
+      chat:
+        options:
+          model: DeepSeek-V3.2
+
 
 
 

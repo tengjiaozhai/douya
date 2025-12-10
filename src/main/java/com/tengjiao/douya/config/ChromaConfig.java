@@ -38,8 +38,8 @@ public class ChromaConfig {
     }
 
     @Bean
-    public VectorStore chromaVectorStore(EmbeddingModel embeddingModel, ChromaApi chromaApi) {
-        return ChromaVectorStore.builder(chromaApi, embeddingModel)
+    public VectorStore chromaVectorStore(EmbeddingModel dashscopeEmbeddingModel, ChromaApi chromaApi) {
+        return ChromaVectorStore.builder(chromaApi, dashscopeEmbeddingModel)
                 .collectionName(chromaProperties.getCollectionName())
                 .databaseName("SpringAiDatabase")  // Chroma v2 需要的 database 参数
                 .tenantName("SpringAiTenant")      // Chroma v2 需要的 tenant 参数
