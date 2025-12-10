@@ -1,6 +1,7 @@
 package com.tengjiao.douya.app;
 
 
+import com.tengjiao.douya.interceptors.UserPreferInterceptors;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -148,5 +149,9 @@ public class UserVectorApp {
                 .build();
 
         return chromaVectorStore.similaritySearch(searchRequest);
+    }
+
+    public UserPreferInterceptors.UserPreferences getPreferences(String userId) {
+        return null;
     }
 }

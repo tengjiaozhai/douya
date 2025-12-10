@@ -5,6 +5,8 @@ spring:
       embedding:
         options:
           model: text-embedding-v4
+    deepseek:
+        api-key: sk-ece64b17333940239252dcf326f3895e
     vectorstore:
       chroma:
         client:

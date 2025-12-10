@@ -44,20 +44,8 @@ public class EatingMasterApp {
 
     private final ChatModel dashScopeChatModel;
 
-    public EatingMasterApp(@Value("${spring.ai.dashscope.api-key}") String apiKey) {
-        DashScopeApi dashScopeApi = DashScopeApi.builder()
-            .apiKey(apiKey)
-            .build();
-        this.dashScopeChatModel = DashScopeChatModel.builder()
-            .dashScopeApi(dashScopeApi)
-            .defaultOptions(DashScopeChatOptions.builder()
-                .withTemperature(0.5)
-                .withMaxToken(1000)
-                .withEnableSearch(true)
-                .withTopP(0.9)
-                .withModel("qwen-plus")
-                .build())
-            .build();
+    public EatingMasterApp(ChatModel eatingMasterModel) {
+        this.dashScopeChatModel = eatingMasterModel;
     }
 
     public String ask(String message){
