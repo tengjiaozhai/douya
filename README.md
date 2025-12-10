@@ -9,6 +9,8 @@ Douya 是一个基于 Spring Boot 开发的智能体（AI Agent）后端服务�
 - **核心框架**: Spring Boot 3.5.8
 - **AI 框架**: Spring AI Alibaba (Agent Framework)
 - **大模型服务**: Alibaba DashScope
+- **向量数据库**: Chroma Vector Store
+- **嵌入模型**: DashScope Embedding (qwen2.5-vl-embedding)
 - **API 文档**: Knife4j (Swagger/OpenAPI 3)
 - **工具库**: Lombok, Feishu OAPI SDK
 - **构建工具**: Maven
@@ -30,10 +32,22 @@ spring:
   ai:
     dashscope:
       api-key: <YOUR_DASHSCOPE_API_KEY>
+    vectorstore:
+      chroma:
+        collection-name: douya_collection
+        client:
+          host: http://localhost
+          port: 8000
 
 feishu:
   app-id: <YOUR_FEISHU_APP_ID>
   app-secret: <YOUR_FEISHU_APP_SECRET>
+```
+
+**注意**: 使用向量存储功能前，需要先启动 Chroma 服务。可以使用 Docker 快速启动：
+
+```bash
+docker run -d -p 8000:8000 chromadb/chroma
 ```
 
 ### 3. 启动项目
@@ -56,20 +70,24 @@ mvn spring-boot:run
 ```
 douya
 ├── src/main/java/com/tengjiao/douya
+│   ├── app
+│   │   └── UserVectorApp.java      # 用户向量服务（向量存储与搜索）
 │   ├── config
-│   │   └── FeishuConfig.java  # 飞书 WebSocket 配置
+│   │   ├── ChromaConfig.java       # Chroma 向量数据库配置
+│   │   ├── ChromaProperties.java   # Chroma 配置属性
+│   │   └── FeishuConfig.java       # 飞书 WebSocket 配置
 │   ├── controller
-│   │   ├── AiController.java      # AI 相关接口
-│   │   └── FeishuController.java  # 飞书 Token 接口
+│   │   ├── AiController.java       # AI 相关接口
+│   │   └── FeishuController.java   # 飞书 Token 接口
 │   ├── service
-│   │   ├── FeishuService.java     # 飞书服务接口
+│   │   ├── FeishuService.java      # 飞书服务接口
 │   │   └── impl
 │   │       └── FeishuServiceImpl.java # 飞书服务实现 (Token 缓存)
-│   └── DouyaApplication.java  # 启动类
+│   └── DouyaApplication.java       # 启动类
 ├── src/main/resources
-│   ├── application.yml        # 主配置
-│   └── application-dev.yml    # 开发环境配置
-└── pom.xml                    # Maven 依赖配置
+│   ├── application.yml             # 主配置
+│   └── application-dev.yml         # 开发环境配置
+└── pom.xml                         # Maven 依赖配置
 ```
 
 ## 功能特性
@@ -90,6 +108,53 @@ douya
 3.  **消息发送**:
     - 支持发送文本、富文本、卡片等多种类型的消息给指定用户或群组。
     - 接口地址: `POST /api/douya/feishu/message/send?receive_id_type=open_id`
+
+### 向量存储 (Vector Store Integration)
+
+项目集成了 **Chroma 向量数据库**，结合阿里云 DashScope 的 `qwen2.5-vl-embedding` 模型，提供强大的向量存储和语义搜索能力：
+
+1.  **用户隔离的向量存储**:
+    - 通过 `UserVectorApp` 服务实现基于 `userId` 的数据隔离。
+    - 每个用户的向量数据独立存储，互不干扰。
+    - 自动添加时间戳元数据，便于数据管理。
+2.  **相似度搜索**:
+
+    - 支持语义相似度搜索，适用于"吃饭大师"等场景。
+    - 可配置 Top-K 结果数量（默认 5 条）。
+    - 可配置相似度阈值（默认 0.7）。
+    - 自动按 `userId` 过滤，确保数据隔离。
+
+3.  **配置说明**:
+
+    ```yaml
+    spring:
+      ai:
+        dashscope:
+          api-key: <YOUR_DASHSCOPE_API_KEY>
+        vectorstore:
+          chroma:
+            collection-name: douya_collection
+            client:
+              host: http://localhost
+              port: 8000
+    ```
+
+4.  **使用示例**:
+
+    ```java
+    @Autowired
+    private UserVectorApp userVectorApp;
+
+    // 存储向量数据
+    List<Document> documents = List.of(
+        new Document("川菜馆推荐：麻辣香锅很好吃"),
+        new Document("粤菜馆推荐：早茶很正宗")
+    );
+    userVectorApp.addDocuments(documents, "user123");
+
+    // 相似度搜索
+    List<Document> results = userVectorApp.searchSimilar("我想吃辣的", "user123");
+    ```
 
 ## 开发者
 

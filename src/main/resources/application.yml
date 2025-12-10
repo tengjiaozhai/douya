@@ -3,6 +3,19 @@ spring:
     name: douya
   profiles:
     active: dev
+  ai:
+    chat:
+        observations:
+            log-prompt: true
+            log-completion: true
+    image:
+        observations:
+            log-prompt: true
+    vectorstore:
+      observations:
+          log-query-response: true
+
+
 
 # springdoc-openapi项目配置
 springdoc:

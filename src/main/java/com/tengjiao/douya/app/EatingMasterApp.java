@@ -43,10 +43,8 @@ public class EatingMasterApp {
        \s""";
 
     private final ChatModel dashScopeChatModel;
-    private final EmbeddingModel dashScopeEmbeddingModel;
-    private final EmbeddingOptions dashScopeEmbeddingOptions;
 
-    public EatingMasterApp(@Value("${spring.ai.dashscope.api-key}") String apiKey,EmbeddingModel dashScopeEmbeddingModel) {
+    public EatingMasterApp(@Value("${spring.ai.dashscope.api-key}") String apiKey) {
         DashScopeApi dashScopeApi = DashScopeApi.builder()
             .apiKey(apiKey)
             .build();
@@ -60,10 +58,6 @@ public class EatingMasterApp {
                 .withModel("qwen-plus")
                 .build())
             .build();
-        this.dashScopeEmbeddingOptions = DashScopeEmbeddingOptions.builder()
-                .withModel("qwen2.5-vl-embedding")
-                .build();
-        this.dashScopeEmbeddingModel = dashScopeEmbeddingModel;
     }
 
     public String ask(String message){
