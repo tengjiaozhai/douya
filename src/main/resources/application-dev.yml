@@ -1,19 +1,25 @@
 spring:
-  ai:
-    dashscope:
-      api-key: api-key
-      embedding:
-        options:
-          model: text-embedding-v4
-    deepseek:
-        api-key: api-key
-    vectorstore:
-      chroma:
-        client:
-          host: http://121.43.231.155
-          port: 8000
-        collection-name: douya
+    datasource:
+        url: jdbc:postgresql://url:5432/douya?currentSchema=douya
+        username: username
+        password: password
+        driver-class-name: org.postgresql.Driver
+        type: com.zaxxer.hikari.HikariDataSource
+    ai:
+        dashscope:
+            api-key: api-key
+            embedding:
+                options:
+                    model: text-embedding-v4
+        deepseek:
+            api-key: api-key
+        vectorstore:
+            chroma:
+                client:
+                    host: http://url
+                    port: 8000
+                collection-name: douya
 
 feishu:
-  app-id: app-id
-  app-secret: app-secret
+    app-id: app-id
+    app-secret: app-secret

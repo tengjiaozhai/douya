@@ -14,10 +14,6 @@ spring:
     vectorstore:
       observations:
           log-query-response: true
-    deepseek:
-      chat:
-        options:
-          model: DeepSeek-V3.2
 
 
 

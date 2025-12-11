@@ -65,6 +65,68 @@ mvn spring-boot:run
 - **API 文档 (Knife4j)**: [http://localhost:8787/api/doc.html](http://localhost:8787/api/doc.html)
 - **健康检查**: [http://localhost:8787/api/douya/hello](http://localhost:8787/api/douya/hello)
 
+## 记忆存储 (Memory Configuration)
+
+本项目主要使用 `Spring AI Alibaba Graph` 提供的 `Store` 接口来管理 Agent 的状态（State）和记忆（Memory）。目前支持以下四种存储介质，其优劣对比及选择建议如下：
+
+| 存储方案          | 类型    | 优点                                                  | 缺点                                                | 适用场景                              | 推荐指数          |
+| :---------------- | :------ | :---------------------------------------------------- | :-------------------------------------------------- | :------------------------------------ | :---------------- |
+| **MemoryStore**   | 内存    | 🚀 **极速**、零配置、无依赖                           | ❌ **易失性** (重启即丢)、占用 JVM 内存、不支持集群 | **开发/测试/演示** (当前默认)         | ⭐⭐⭐ (Dev)      |
+| **RedisStore**    | KV 缓存 | ⚡ **高性能**、支持持久化、支持集群共享、TTL 机制完善 | ⚠️ 需部署 Redis 服务                                | **生产环境首选** (Session/State 管理) | ⭐⭐⭐⭐⭐ (Prod) |
+| **DatabaseStore** | SQL     | 🛡️ **结构化**、数据强一致、易于审计/分析              | 📉 读写性能略低、Schema 变更略繁琐                  | 需与业务数据强关联、长期归档          | ⭐⭐⭐            |
+| **MongoStore**    | 文档    | 📝 **灵活** (Schema-less)、适合存复杂对象             | ⚠️ 需部署 Mongo、运维成本增加                       | 存储大规模非结构化历史数据            | ⭐⭐⭐            |
+
+### 环境与依赖要求
+
+使用非 `MemoryStore` 方案时，需要准备相应的外部服务并添加 Maven 依赖：
+
+- **RedisStore**:
+  - **服务**: 需安装 Redis Server (推荐 6.0+)。
+  - **依赖**: `spring-boot-starter-data-redis`。
+- **DatabaseStore**:
+  - **服务**: 需安装 MySQL / PostgreSQL 等 JDBC 兼容数据库。
+  - **依赖**: `spring-boot-starter-jdbc` 及对应数据库驱动 (如 `mysql-connector-j`)。
+  - **初始化**: 需手动创建存储 Session/State 的数据表 (Schema)。
+- **MongoStore**:
+  - **服务**: 需安装 MongoDB Server。
+  - **依赖**: `spring-boot-starter-data-mongodb`。
+
+> **⚠️ 重要区分**:
+> 上述要求仅针对 **Agent 记忆/状态 (Memory/State)** 存储。
+>
+> - 它们只需要标准的数据库功能 (KV 读写 / SQL 查询)。
+> - **不需要** 安装 `Redis Stack` (RediSearch) 或 `pgvector` 等向量插件。
+> - (向量插件仅在您使用 Redis/PG 替代 Chroma 作为 **向量数据库 (Vector Store)** 时才需要)。
+
+### 方案建议
+
+1.  **当前状态**: 为了保证项目 **快速启动 (Quick Start)** 且不依赖过多外部环境，项目默认使用 **`MemoryStore`**。这意味着重启服务后，用户的短期对话历史和临时偏好将会丢失。
+2.  **生产建议**: 对于 **生产环境**，强烈建议切换为 **`RedisStore`**。
+    - 它能提供毫秒级的状态读写，这对 AI 对话的响应速度至关重要。
+    - 支持数据持久化，确保用户偏好不会因服务重启而丢失。
+    - 原生支持分布式锁和过期策略，适合管理海量会话。
+
+### 如何切换到 RedisStore
+
+1.  添加 Redis 依赖到 `pom.xml`:
+    ```xml
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-data-redis</artifactId>
+    </dependency>
+    ```
+2.  修改代码 (如 `EatingMasterApp.java`):
+
+    ```java
+    // 注入 RedisTemplate
+    @Autowired
+    private RedisTemplate<String, Object> redisTemplate;
+
+    // 替换 MemoryStore
+    // MemoryStore memoryStore = new MemoryStore();
+    RedisStore redisStore = new RedisStore(redisTemplate);
+    ```
+
 ## 项目结构
 
 ```
@@ -139,7 +201,9 @@ douya
               port: 8000
     ```
 
-4.  **使用示例**:
+    ````
+
+    4.  **使用示例**:
 
     ```java
     @Autowired
@@ -154,7 +218,24 @@ douya
 
     // 相似度搜索
     List<Document> results = userVectorApp.searchSimilar("我想吃辣的", "user123");
-    ```
+    ````
+
+### 用户偏好学习 (User Preference Learning)
+
+项目实现了基于 **DeepSeek** 模型的智能用户偏好学习功能，能够在对话过程中自动分析并提取用户的饮食偏好，实现更懂用户的个性化服务：
+
+1.  **智能提取**:
+    - 使用 `PreferenceLearningHook` 拦截 AI 回复后的流程。
+    - 利用 DeepSeek 推理模型分析用户的每一条输入消息。
+    - 自动提取明确表达的喜好（如"我喜欢吃辣"、"不吃香菜"等）。
+2.  **长期记忆**:
+    - 基于 `MemoryStore` 实现用户偏好的持久化存储。
+    - 偏好数据按 `userId` 隔离存储，随用随取。
+3.  **使用方式**:
+    - **对话接口**: `GET /api/douya/chat?message=我喜欢吃火锅&userId=user_001`
+      - 系统会在后台自动分析并记录"火锅"这一偏好。
+    - **查询偏好**: `GET /api/douya/preferences?userId=user_001`
+      - 返回该用户所有已记录的偏好列表。
 
 ## 开发者
 
