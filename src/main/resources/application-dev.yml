@@ -5,6 +5,12 @@ spring:
         password: password
         driver-class-name: org.postgresql.Driver
         type: com.zaxxer.hikari.HikariDataSource
+        hikari:
+            max-lifetime: 60000
+            connection-timeout: 3000
+            idle-timeout: 3000
+            minimum-idle: 2
+            maximum-pool-size: 100
     ai:
         dashscope:
             api-key: api-key
