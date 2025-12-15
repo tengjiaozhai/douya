@@ -59,44 +59,13 @@ public class CombinedMemoryHook extends ModelHook {
             return CompletableFuture.completedFuture(Map.of());
         }
         String userId = (String) userIdOpt.get();
-
-        // 分离消息，准备归档
-        List<Message> messagesToKeep = new ArrayList<>();
-        List<Message> messagesToArchive = new ArrayList<>();
-
-        List<Message> contentMessages = new ArrayList<>();
-        List<Message> systemMessages = new ArrayList<>();
-
-        for (Message msg : messages) {
-            if (msg instanceof SystemMessage) {
-                systemMessages.add(msg);
-            } else {
-                contentMessages.add(msg);
-            }
-        }
-
-        // 计算需要保留的内容消息数量 (阈值 - 系统消息数量)
-        int capacity = threshold - systemMessages.size();
-        if (capacity < 1) {
-            capacity = 1; // 至少保留一条内容消息
-        }
-
-        if (contentMessages.size() > capacity) {
-            int cutOff = contentMessages.size() - capacity;
-
-            // 归档较早的消息
-            messagesToArchive.addAll(contentMessages.subList(0, cutOff));
-
-            // 重组当前上下文：系统消息 + 最近的消息
-            messagesToKeep.addAll(systemMessages);
-            messagesToKeep.addAll(contentMessages.subList(cutOff, contentMessages.size()));
-
-            // 执行归档操作
+        // 归档最新消息
+        if (messages.size() > threshold) {
+            int cutOff = messages.size() - threshold;
+            List<Message> messagesToArchive = messages.subList(0, cutOff);
             archiveMessages(userId, messagesToArchive);
-
-            // 返回更新后的 State，Agent 将使用缩减后的消息列表进行思考
-            log.info("User {} memory truncated. Archived: {}, Kept: {}", userId, messagesToArchive.size(), messagesToKeep.size());
-            return CompletableFuture.completedFuture(Map.of("messages", messagesToKeep));
+            log.info("User {} memory truncated. Archived: {}", userId, messagesToArchive.size());
+            return CompletableFuture.completedFuture(Map.of("messages", messages.subList(cutOff, messages.size())));
         }
 
         return CompletableFuture.completedFuture(Map.of());

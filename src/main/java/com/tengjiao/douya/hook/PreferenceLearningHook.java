@@ -67,11 +67,22 @@ public class PreferenceLearningHook extends ModelHook {
         }
 
         // 获取最后一条用户消息
-        Message lastMessage = messages.get(messages.size() - 1);
-        if (!(lastMessage instanceof UserMessage)) {
+//        Optional<Message> lastMessage = messages.stream()
+//                .reduce((a, b) -> b)
+//                .filter(message -> message instanceof UserMessage)
+//                .map(Optional::of)
+//                .orElse(Optional.empty());
+        Message lastMessage = null;
+        for (int i = messages.size()-1 ; i >= 0; i--) {
+            Message message = messages.get(i);
+            if (message instanceof UserMessage) {
+                lastMessage = message;
+                break;
+            }
+        }
+        if (lastMessage == null) {
             return CompletableFuture.completedFuture(Map.of());
         }
-
         String userInput = lastMessage.getText();
 
         // 使用 DeepSeek 模型提取偏好
