@@ -4,8 +4,9 @@ import com.alibaba.cloud.ai.graph.agent.hook.HookPosition;
 import com.alibaba.cloud.ai.graph.agent.hook.ModelHook;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
-import com.alibaba.cloud.ai.graph.store.StoreItem;
 import com.alibaba.cloud.ai.graph.store.Store;
+import com.alibaba.cloud.ai.graph.store.StoreItem;
+import com.alibaba.cloud.ai.graph.store.stores.MemoryStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -26,20 +27,18 @@ import java.util.concurrent.CompletableFuture;
 @Slf4j
 public class PreferenceLearningHook extends ModelHook {
 
-    // 用于偏好学习的聊天模型(DeepSeek)
     private final ChatModel preferenceLearningModel;
-    // 用于存储用户偏好的存储接口
-    private final Store memoryStore;
+    private final Store douyaDatabaseStore;
 
     /**
      * 构造函数
      *
      * @param preferenceLearningModel DeepSeek 模型,用于分析用户偏好
-     * @param memoryStore             存储接口,用于持久化用户偏好
+     * @param douyaDatabaseStore             内存存储,用于持久化用户偏好
      */
-    public PreferenceLearningHook(ChatModel preferenceLearningModel, Store memoryStore) {
+    public PreferenceLearningHook(ChatModel preferenceLearningModel, Store douyaDatabaseStore) {
         this.preferenceLearningModel = preferenceLearningModel;
-        this.memoryStore = memoryStore;
+        this.douyaDatabaseStore = douyaDatabaseStore;
     }
 
     @Override
@@ -101,23 +100,21 @@ public class PreferenceLearningHook extends ModelHook {
      * @return 提取的偏好,如果没有偏好则返回 null
      */
     private String extractPreference(String userInput) {
-        // 构建提示词，指导模型如何提取偏好信息
         String prompt = """
                 请分析以下用户消息,提取其中表达的饮食偏好、口味偏好、饮食习惯等信息。
-                
+
                 规则:
                 1. 只提取明确的偏好信息,如"喜欢"、"偏好"、"不喜欢"、"讨厌"、"习惯"等
                 2. 如果消息中没有明确的偏好信息,直接返回"无"
                 3. 提取的偏好要简洁明了,一句话概括
                 4. 只返回偏好内容,不要有任何解释或额外文字
-                
+
                 用户消息: %s
-                
+
                 提取的偏好:
                 """.formatted(userInput);
 
         try {
-            // 调用模型获取响应
             ChatResponse response = preferenceLearningModel.call(new Prompt(new UserMessage(prompt)));
             String result = response.getResult().getOutput().getText().trim();
 
@@ -140,8 +137,7 @@ public class PreferenceLearningHook extends ModelHook {
      * @return 偏好列表
      */
     private List<String> loadPreferences(String userId) {
-        // 从内存存储中获取用户的偏好数据
-        Optional<StoreItem> prefsOpt = memoryStore.getItem(List.of("user_data"), userId + "_preferences");
+        Optional<StoreItem> prefsOpt = douyaDatabaseStore.getItem(List.of("user_data"), userId + "_preferences");
         if (prefsOpt.isPresent()) {
             Map<String, Object> prefsData = prefsOpt.get().getValue();
             Object items = prefsData.get("items");
@@ -159,14 +155,12 @@ public class PreferenceLearningHook extends ModelHook {
      * @param preferences 偏好列表
      */
     private void savePreferences(String userId, List<String> preferences) {
-        // 创建偏好数据映射
         Map<String, Object> prefsData = new HashMap<>();
         prefsData.put("items", preferences);
         prefsData.put("updated_at", System.currentTimeMillis());
 
-        // 创建存储项并保存到内存存储中
         StoreItem item = StoreItem.of(List.of("user_data"), userId + "_preferences", prefsData);
-        memoryStore.putItem(item);
+        douyaDatabaseStore.putItem(item);
     }
 
     @Override

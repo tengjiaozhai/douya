@@ -69,11 +69,12 @@ public class FeishuConfig {
                         switch (messageType) {
                             case "text" -> {
                                 FeishuTextContent feishuTextContent = Jsons.DEFAULT.fromJson(content, FeishuTextContent.class);
-                                String response = eatingMasterApp.ask(feishuTextContent.getText());
+                                String userId = feishuMessageEvent.getSender().getSenderId().getUserId();
+                                String response = eatingMasterApp.ask(feishuTextContent.getText(),userId);
                                 String uuid = UUID.randomUUID().toString();
                                 feishuTextContent.setText(response);
                                 String requestContent = Jsons.DEFAULT.toJson(feishuTextContent);
-                                FeishuMessageSendRequest request = new FeishuMessageSendRequest(feishuMessageEvent.getSender().getSenderId().getUserId(), messageType,
+                                FeishuMessageSendRequest request = new FeishuMessageSendRequest(userId, messageType,
                                         requestContent, uuid);
                                 feishuService.sendMessage("user_id",
                                         request);

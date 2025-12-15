@@ -6,17 +6,20 @@ import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingModel;
 import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingOptions;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.store.Store;
 import com.alibaba.cloud.ai.graph.store.stores.DatabaseStore;
 import com.alibaba.cloud.ai.graph.store.stores.MemoryStore;
+import com.tengjiao.douya.hook.CombinedMemoryHook;
 import com.tengjiao.douya.hook.MessageSummarizationHook;
 import com.tengjiao.douya.hook.PreferenceLearningHook;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
@@ -46,12 +49,14 @@ public class EatingMasterApp {
           语言要求:所有回复、思考过程及任务清单,均须使用中文。
        \s""";
 
-    private final ChatModel dashScopeChatModel;
+    private final ChatModel eatingMasterModel;
     private final ChatModel summaryChatModel;
     private final Store douyaDatabaseStore;
+    private final Store memoryStore = new MemoryStore();
+    private final MemorySaver memorySaver = new MemorySaver();
 
     public EatingMasterApp(ChatModel eatingMasterModel, ChatModel summaryChatModel, Store douyaDatabaseStore) {
-        this.dashScopeChatModel = eatingMasterModel;
+        this.eatingMasterModel = eatingMasterModel;
         this.summaryChatModel = summaryChatModel;
         this.douyaDatabaseStore = douyaDatabaseStore;
     }
@@ -66,21 +71,25 @@ public class EatingMasterApp {
     public String ask(String message, String userId) {
         // 创建偏好学习 Hook
         PreferenceLearningHook preferenceLearningHook = new PreferenceLearningHook(summaryChatModel, douyaDatabaseStore);
-        MessageSummarizationHook messageSummarizationHook = new MessageSummarizationHook(summaryChatModel, 2000, 10);
+//         MessageSummarizationHook messageSummarizationHook = new MessageSummarizationHook(summaryChatModel, 2000, 10);
+
+        // 创建记忆结合 Hook (短期记忆10条 -> 长期记忆)
+        CombinedMemoryHook combinedMemoryHook = new CombinedMemoryHook(douyaDatabaseStore, 10);
 
         // 构建 Agent
         ReactAgent agent = ReactAgent.builder()
             .name("EatingMaster")
-            .model(dashScopeChatModel)
+            .model(eatingMasterModel)
             .instruction(SYSTEM_PROMPT)
-            .hooks(preferenceLearningHook,messageSummarizationHook)
+            .hooks(preferenceLearningHook, combinedMemoryHook) // 暂时移除 SummarizationHook，避免逻辑冲突或上下文过大
+            .saver(memorySaver)
             .build();
 
         // 构建配置
         RunnableConfig config = RunnableConfig.builder()
             .threadId("eating_master_" + userId)
             .addMetadata("user_id", userId)
-            .store(douyaDatabaseStore)
+            .store(memoryStore) // 使用内存存储作为短期记忆
             .build();
 
         // UserMessage 输入
