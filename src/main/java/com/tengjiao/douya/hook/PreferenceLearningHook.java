@@ -168,7 +168,6 @@ public class PreferenceLearningHook extends ModelHook {
     private void savePreferences(String userId, List<String> preferences) {
         Map<String, Object> prefsData = new HashMap<>();
         prefsData.put("items", preferences);
-        prefsData.put("updated_at", System.currentTimeMillis());
 
         StoreItem item = StoreItem.of(List.of("user_data"), userId + "_preferences", prefsData);
         douyaDatabaseStore.putItem(item);

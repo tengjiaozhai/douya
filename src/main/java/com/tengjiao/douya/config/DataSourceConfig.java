@@ -2,6 +2,7 @@ package com.tengjiao.douya.config;
 
 import com.alibaba.cloud.ai.graph.store.Store;
 import com.alibaba.cloud.ai.graph.store.stores.DatabaseStore;
+import com.tengjiao.douya.infra.store.PostgresStore;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -33,6 +34,6 @@ public class DataSourceConfig {
     @Bean
     public Store douyaDatabaseStore(DataSource dataSource) {
         log.info("Initializing PostgresStore with table 'douya_store'");
-        return new com.tengjiao.douya.infra.store.PostgresStore(dataSource, "douya_store");
+        return new PostgresStore(dataSource, "douya_store");
     }
 }

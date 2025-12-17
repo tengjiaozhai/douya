@@ -1,9 +1,6 @@
 package com.tengjiao.douya.infra.store;
 
-import com.alibaba.cloud.ai.graph.store.NamespaceListRequest;
-import com.alibaba.cloud.ai.graph.store.StoreSearchRequest;
-import com.alibaba.cloud.ai.graph.store.Store;
-import com.alibaba.cloud.ai.graph.store.StoreItem;
+import com.alibaba.cloud.ai.graph.store.*;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -18,7 +15,8 @@ import java.util.*;
 
 /**
  * PostgreSQL implementation of Store
- * Custom implementation to handle PostgreSQL dialect differences (e.g., INSERT ON CONFLICT)
+ * Custom implementation to handle PostgreSQL dialect differences (e.g., INSERT
+ * ON CONFLICT)
  */
 @Slf4j
 public class PostgresStore implements Store {
@@ -35,15 +33,15 @@ public class PostgresStore implements Store {
 
     private void initTable() {
         String sql = String.format("""
-            CREATE TABLE IF NOT EXISTS %s (
-                namespace text NOT NULL,
-                access_key text NOT NULL,
-                value jsonb,
-                created_at timestamp DEFAULT now(),
-                updated_at timestamp DEFAULT now(),
-                PRIMARY KEY (namespace, access_key)
-            )
-        """, tableName);
+                    CREATE TABLE IF NOT EXISTS %s (
+                        namespace text NOT NULL,
+                        access_key text NOT NULL,
+                        value jsonb,
+                        created_at timestamp DEFAULT now(),
+                        updated_at timestamp DEFAULT now(),
+                        PRIMARY KEY (namespace, access_key)
+                    )
+                """, tableName);
         try {
             jdbcTemplate.execute(sql);
             log.info("Initialized PostgresStore table: {}", tableName);
@@ -59,10 +57,11 @@ public class PostgresStore implements Store {
             throw new RuntimeException("Failed to serialize namespace", e);
         }
     }
-    
+
     private List<String> deserializeNamespace(String namespaceJson) {
         try {
-            return objectMapper.readValue(namespaceJson, new TypeReference<List<String>>() {});
+            return objectMapper.readValue(namespaceJson, new TypeReference<List<String>>() {
+            });
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to deserialize namespace", e);
         }
@@ -78,7 +77,8 @@ public class PostgresStore implements Store {
 
     private Map<String, Object> deserializeValue(String valueJson) {
         try {
-            return objectMapper.readValue(valueJson, new TypeReference<Map<String, Object>>() {});
+            return objectMapper.readValue(valueJson, new TypeReference<Map<String, Object>>() {
+            });
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to deserialize value", e);
         }
@@ -88,7 +88,7 @@ public class PostgresStore implements Store {
     public Optional<StoreItem> getItem(List<String> namespace, String key) {
         String sql = String.format("SELECT * FROM %s WHERE namespace = ? AND access_key = ?", tableName);
         String nsJson = serializeNamespace(namespace);
-        
+
         try {
             List<StoreItem> items = jdbcTemplate.query(sql, new RowMapper<StoreItem>() {
                 @Override
@@ -99,7 +99,7 @@ public class PostgresStore implements Store {
                     return StoreItem.of(namespace, key, valMap);
                 }
             }, nsJson, key);
-            
+
             return items.isEmpty() ? Optional.empty() : Optional.of(items.get(0));
         } catch (Exception e) {
             log.error("Error getting item", e);
@@ -111,22 +111,23 @@ public class PostgresStore implements Store {
     public void putItem(StoreItem item) {
         String nsJson = serializeNamespace(item.getNamespace());
         String valJson = serializeValue(item.getValue());
-        
+
         String sql = String.format("""
-            INSERT INTO %s (namespace, access_key, value, updated_at) 
-            VALUES (?, ?, ?::jsonb, now())
-            ON CONFLICT (namespace, access_key) 
-            DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-        """, tableName);
-        
+                    INSERT INTO %s (namespace, access_key, value, updated_at)
+                    VALUES (?, ?, CAST(? AS jsonb), now())
+                    ON CONFLICT (namespace, access_key)
+                    DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """, tableName);
+
         jdbcTemplate.update(sql, nsJson, item.getKey(), valJson);
     }
 
     @Override
-    public void deleteItem(List<String> namespace, String key) {
+    public boolean deleteItem(List<String> namespace, String key) {
         String nsJson = serializeNamespace(namespace);
         String sql = String.format("DELETE FROM %s WHERE namespace = ? AND access_key = ?", tableName);
-        jdbcTemplate.update(sql, nsJson, key);
+        int update = jdbcTemplate.update(sql, nsJson, key);
+        return update > 0;
     }
 
     @Override
@@ -140,18 +141,18 @@ public class PostgresStore implements Store {
     }
 
     @Override
-    public int size() {
+    public long size() {
         Integer count = jdbcTemplate.queryForObject("SELECT count(*) FROM " + tableName, Integer.class);
         return count != null ? count : 0;
     }
 
     @Override
-    public List<List<String>> listNamespaces(NamespaceListRequest request) {
+    public List<String> listNamespaces(NamespaceListRequest request) {
         return Collections.emptyList();
     }
 
     @Override
-    public List<StoreItem> searchItems(StoreSearchRequest request) {
-        return Collections.emptyList();
+    public StoreSearchResult searchItems(StoreSearchRequest request) {
+        return null;
     }
 }

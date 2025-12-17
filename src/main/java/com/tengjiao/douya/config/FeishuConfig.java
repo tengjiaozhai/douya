@@ -72,9 +72,17 @@ public class FeishuConfig {
                                 String userId = feishuMessageEvent.getSender().getSenderId().getUserId();
                                 String response = eatingMasterApp.ask(feishuTextContent.getText(),userId);
                                 String uuid = UUID.randomUUID().toString();
-                                feishuTextContent.setText(response);
+                                // 先返回 再思考
+                                feishuTextContent.setText("稍等哦，本大师正在思考...");
                                 String requestContent = Jsons.DEFAULT.toJson(feishuTextContent);
                                 FeishuMessageSendRequest request = new FeishuMessageSendRequest(userId, messageType,
+                                        requestContent, uuid);
+                                feishuService.sendMessage("user_id",
+                                        request);
+                                feishuTextContent.setText(response);
+                                requestContent = Jsons.DEFAULT.toJson(feishuTextContent);
+                                uuid = UUID.randomUUID().toString();
+                                request = new FeishuMessageSendRequest(userId, messageType,
                                         requestContent, uuid);
                                 feishuService.sendMessage("user_id",
                                         request);
