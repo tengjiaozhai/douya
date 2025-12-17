@@ -32,9 +32,7 @@ public class DataSourceConfig {
 
     @Bean
     public Store douyaDatabaseStore(DataSource dataSource) {
-        log.info("Initializing DatabaseStore with table 'douya_store' using PostgreSQL");
-        // 初始化 DatabaseStore，使用 douya_store 表名
-        // 这里的 dataSource 已经配置了 currentSchema=douya，所以表会创建在 douya schema 下
-        return new DatabaseStore(dataSource, "douya_store");
+        log.info("Initializing PostgresStore with table 'douya_store'");
+        return new com.tengjiao.douya.infra.store.PostgresStore(dataSource, "douya_store");
     }
 }

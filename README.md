@@ -83,9 +83,8 @@ mvn spring-boot:run
 - **RedisStore**:
   - **服务**: 需安装 Redis Server (推荐 6.0+)。
   - **依赖**: `spring-boot-starter-data-redis`。
-- **DatabaseStore**:
-  - **服务**: 需安装 MySQL / PostgreSQL 等 JDBC 兼容数据库。
-  - **依赖**: `spring-boot-starter-jdbc` 及对应数据库驱动 (如 `mysql-connector-j`)。
+- **调整 DeepSeek 集成**: 由于 Spring AI 1.0.0-M6 不包含 `spring-ai-starter-model-deepseek`，已将其替换为 `spring-ai-openai-spring-boot-starter`，并通过 OpenAI 兼容模式连接 DeepSeek API。相关配置已在 `ModelConfig.java` 中更新。
+- **自定义 PostgresStore**: 解决了 `DatabaseStore` 在 PostgreSQL 下使用 MySQL 语法 (`ON DUPLICATE KEY UPDATE`) 导致的语法错误问题。新增 `PostgresStore` 实现类，采用 `INSERT ... ON CONFLICT` 语法适配 PostgreSQL，并在 `DataSourceConfig` 中完成了替换。
   - **初始化**: 需手动创建存储 Session/State 的数据表 (Schema)。
 - **MongoStore**:
   - **服务**: 需安装 MongoDB Server。
