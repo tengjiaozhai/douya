@@ -25,6 +25,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -49,6 +52,14 @@ public class FeishuConfig {
     @Resource
     private FeishuService feishuService;
 
+    // 消息去重缓存：保存最近 1000 条消息 ID，防止飞书重试导致重复思考
+    private final Map<String, Boolean> messageIdCache = Collections.synchronizedMap(new LinkedHashMap<String, Boolean>(1001, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+            return size() > 1000;
+        }
+    });
+
     /**
      * 创建飞书 WebSocket 客户端
      */
@@ -63,32 +74,40 @@ public class FeishuConfig {
                         String json = Jsons.DEFAULT.toJson(event.getEvent());
                         FeishuMessageEvent feishuMessageEvent = Jsons.DEFAULT.fromJson(json, FeishuMessageEvent.class);
                         FeishuMessageEvent.Message message = feishuMessageEvent.getMessage();
-                        String content = message.getContent();
-                        String messageType = message.getMessageType();
-                        log.info("[Feishu] 私聊消息内容: {}", message);
-                        switch (messageType) {
-                            case "text" -> {
-                                FeishuTextContent feishuTextContent = Jsons.DEFAULT.fromJson(content, FeishuTextContent.class);
-                                String userId = feishuMessageEvent.getSender().getSenderId().getUserId();
-                                String response = eatingMasterApp.ask(feishuTextContent.getText(),userId);
-                                String uuid = UUID.randomUUID().toString();
-                                // 先返回 再思考
-                                feishuTextContent.setText("稍等哦，本大师正在思考...");
-                                String requestContent = Jsons.DEFAULT.toJson(feishuTextContent);
-                                FeishuMessageSendRequest request = new FeishuMessageSendRequest(userId, messageType,
-                                        requestContent, uuid);
-                                feishuService.sendMessage("user_id",
-                                        request);
-                                feishuTextContent.setText(response);
-                                requestContent = Jsons.DEFAULT.toJson(feishuTextContent);
-                                uuid = UUID.randomUUID().toString();
-                                request = new FeishuMessageSendRequest(userId, messageType,
-                                        requestContent, uuid);
-                                feishuService.sendMessage("user_id",
-                                        request);
-                            }
+                        String messageId = message.getMessageId();
+                        // 幂等检查：如果消息正在处理或已处理，直接跳过
+                        if (messageIdCache.putIfAbsent(messageId, true) != null) {
+                            log.info("[Feishu] 消息 {} 正在处理中或已处理，跳过重试", messageId);
+                            return;
                         }
+                        // 异步处理大模型逻辑，立即返回给飞书以避免 3s 超时重试
+                        Thread.startVirtualThread(() -> {
+                            try {
+                                String content = message.getContent();
+                                String messageType = message.getMessageType();
+                                String userId = feishuMessageEvent.getSender().getSenderId().getUserId();
 
+                                log.info("[Feishu] 开始异步处理私聊消息: {}", messageId);
+
+                                if ("text".equals(messageType)) {
+                                    FeishuTextContent feishuTextContent = Jsons.DEFAULT.fromJson(content, FeishuTextContent.class);
+                                    String userQuery = feishuTextContent.getText();
+
+                                    // 1. 立即回复“正在思考”提升用户体验
+                                    feishuTextContent.setText("稍等哦，本大师正在思考...");
+                                    feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+
+                                    // 2. 调用大模型（耗时操作）
+                                    String aiResponse = eatingMasterApp.ask(userQuery, userId);
+
+                                    // 3. 发送最终结果
+                                    feishuTextContent.setText(aiResponse);
+                                    feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+                                }
+                            } catch (Exception e) {
+                                log.error("[Feishu] 异步处理消息 {} 异常", messageId, e);
+                            }
+                        });
                     }
                 })
                 .onCustomizedEvent("out_approval", new CustomEventHandler() {

@@ -34,7 +34,7 @@ public class ModelConfig {
             .dashScopeApi(dashScopeApi)
             .defaultOptions(DashScopeChatOptions.builder()
                 .withTemperature(0.5)
-                .withMaxToken(1000)
+                .withMaxToken(2000)
                 .withEnableSearch(true)
                 .withTopP(0.9)
                 .withModel("qwen-plus")
@@ -49,7 +49,7 @@ public class ModelConfig {
             .build();
         DeepSeekChatOptions deepSeekChatOptions = DeepSeekChatOptions.builder()
                 .model(DeepSeekApi.ChatModel.DEEPSEEK_REASONER.getValue())
-                .maxTokens(1000)
+                .maxTokens(2000)
                 .temperature(0.5)
                 .topP(0.9)
                 .build();

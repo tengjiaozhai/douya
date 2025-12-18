@@ -1,28 +1,17 @@
 package com.tengjiao.douya.app;
 
-import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
-import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatModel;
-import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
-import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingModel;
-import com.alibaba.cloud.ai.dashscope.embedding.DashScopeEmbeddingOptions;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
-import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.store.Store;
-import com.alibaba.cloud.ai.graph.store.stores.DatabaseStore;
 import com.alibaba.cloud.ai.graph.store.stores.MemoryStore;
 import com.tengjiao.douya.hook.CombinedMemoryHook;
-import com.tengjiao.douya.hook.MessageSummarizationHook;
 import com.tengjiao.douya.hook.PreferenceLearningHook;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
-import javax.sql.DataSource;
 
 /**
  * 吃饭大师
@@ -52,13 +41,15 @@ public class EatingMasterApp {
     private final ChatModel eatingMasterModel;
     private final ChatModel summaryChatModel;
     private final Store douyaDatabaseStore;
+    private final UserVectorApp userVectorApp;
     private final Store memoryStore = new MemoryStore();
     private final MemorySaver memorySaver = new MemorySaver();
 
-    public EatingMasterApp(ChatModel eatingMasterModel, ChatModel summaryChatModel, Store douyaDatabaseStore) {
+    public EatingMasterApp(ChatModel eatingMasterModel, ChatModel summaryChatModel, Store douyaDatabaseStore, UserVectorApp userVectorApp) {
         this.eatingMasterModel = eatingMasterModel;
         this.summaryChatModel = summaryChatModel;
         this.douyaDatabaseStore = douyaDatabaseStore;
+        this.userVectorApp = userVectorApp;
     }
 
     /**
@@ -73,8 +64,8 @@ public class EatingMasterApp {
         PreferenceLearningHook preferenceLearningHook = new PreferenceLearningHook(summaryChatModel, douyaDatabaseStore);
 //         MessageSummarizationHook messageSummarizationHook = new MessageSummarizationHook(summaryChatModel, 2000, 10);
 
-        // 创建记忆结合 Hook (短期记忆10条 -> 长期记忆)
-        CombinedMemoryHook combinedMemoryHook = new CombinedMemoryHook(douyaDatabaseStore, 10);
+        // 创建记忆结合 Hook (短期记忆10条 -> 长期存储 + AI总结向量化，每凑够10条总结一次)
+        CombinedMemoryHook combinedMemoryHook = new CombinedMemoryHook(douyaDatabaseStore, summaryChatModel, userVectorApp, 10, 10);
 
         // 构建 Agent
         ReactAgent agent = ReactAgent.builder()

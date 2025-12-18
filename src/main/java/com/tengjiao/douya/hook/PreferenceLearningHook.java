@@ -16,6 +16,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.IntStream;
 
 /**
  * 偏好学习 Hook
@@ -34,7 +35,7 @@ public class PreferenceLearningHook extends ModelHook {
      * 构造函数
      *
      * @param preferenceLearningModel DeepSeek 模型,用于分析用户偏好
-     * @param douyaDatabaseStore             内存存储,用于持久化用户偏好
+     * @param douyaDatabaseStore      内存存储,用于持久化用户偏好
      */
     public PreferenceLearningHook(ChatModel preferenceLearningModel, Store douyaDatabaseStore) {
         this.preferenceLearningModel = preferenceLearningModel;
@@ -59,47 +60,38 @@ public class PreferenceLearningHook extends ModelHook {
             log.warn("未找到 user_id,跳过偏好学习");
             return CompletableFuture.completedFuture(Map.of());
         }
-
-        // 提取用户输入消息
         List<Message> messages = (List<Message>) state.value("messages").orElse(new ArrayList<>());
         if (messages.isEmpty()) {
             return CompletableFuture.completedFuture(Map.of());
         }
 
         // 获取最后一条用户消息
-//        Optional<Message> lastMessage = messages.stream()
-//                .reduce((a, b) -> b)
-//                .filter(message -> message instanceof UserMessage)
-//                .map(Optional::of)
-//                .orElse(Optional.empty());
-        Message lastMessage = null;
-        for (int i = messages.size()-1 ; i >= 0; i--) {
-            Message message = messages.get(i);
-            if (message instanceof UserMessage) {
-                lastMessage = message;
-                break;
-            }
-        }
+        Message lastMessage = IntStream.iterate(messages.size() - 1, i -> i >= 0, i -> i - 1).mapToObj(messages::get).filter(message -> message instanceof UserMessage).findFirst().orElse(null);
         if (lastMessage == null) {
             return CompletableFuture.completedFuture(Map.of());
         }
-        String userInput = lastMessage.getText();
+        Thread.startVirtualThread(() -> {
+            // 这个逻辑在另一个线程异步执行
+            // 提取用户输入消息
+            String userInput = lastMessage.getText();
 
-        // 使用 DeepSeek 模型提取偏好
-        String extractedPreference = extractPreference(userInput);
+            // 使用 DeepSeek 模型提取偏好
+            String extractedPreference = extractPreference(userInput);
 
-        if (extractedPreference != null && !extractedPreference.trim().isEmpty()) {
-            // 加载现有偏好
-            List<String> preferences = loadPreferences(userId);
+            if (extractedPreference != null && !extractedPreference.trim().isEmpty()) {
+                // 加载现有偏好
+                Set<String> preferences = loadPreferences(userId);
 
-            // 添加新偏好
-            preferences.add(extractedPreference);
+                // 添加新偏好
+                preferences.add(extractedPreference);
 
-            // 保存偏好
-            savePreferences(userId, preferences);
+                // 保存偏好
+                savePreferences(userId, preferences);
 
-            log.info("学习到用户偏好 [{}]: {}", userId, extractedPreference);
-        }
+                log.info("学习到用户偏好 [{}]: {}", userId, extractedPreference);
+            }
+
+        });
 
         return CompletableFuture.completedFuture(Map.of());
     }
@@ -112,18 +104,18 @@ public class PreferenceLearningHook extends ModelHook {
      */
     private String extractPreference(String userInput) {
         String prompt = """
-                请分析以下用户消息,提取其中表达的饮食偏好、口味偏好、饮食习惯等信息。
+            请分析以下用户消息,提取其中表达的饮食偏好、口味偏好、饮食习惯等信息。
 
-                规则:
-                1. 只提取明确的偏好信息,如"喜欢"、"偏好"、"不喜欢"、"讨厌"、"习惯"等
-                2. 如果消息中没有明确的偏好信息,直接返回"无"
-                3. 提取的偏好要简洁明了,一句话概括
-                4. 只返回偏好内容,不要有任何解释或额外文字
+            规则:
+            1. 只提取明确的偏好信息,如"喜欢"、"偏好"、"不喜欢"、"讨厌"、"习惯"、"不太能"等
+            2. 如果消息中没有明确的偏好信息,直接返回"无"
+            3. 提取的偏好要简洁明了,一句话概括
+            4. 只返回偏好内容,不要有任何解释或额外文字
 
-                用户消息: %s
+            用户消息: %s
 
-                提取的偏好:
-                """.formatted(userInput);
+            提取的偏好:
+            """.formatted(userInput);
 
         try {
             ChatResponse response = preferenceLearningModel.call(new Prompt(new UserMessage(prompt)));
@@ -147,16 +139,16 @@ public class PreferenceLearningHook extends ModelHook {
      * @param userId 用户 ID
      * @return 偏好列表
      */
-    private List<String> loadPreferences(String userId) {
+    private Set<String> loadPreferences(String userId) {
         Optional<StoreItem> prefsOpt = douyaDatabaseStore.getItem(List.of("user_data"), userId + "_preferences");
         if (prefsOpt.isPresent()) {
             Map<String, Object> prefsData = prefsOpt.get().getValue();
             Object items = prefsData.get("items");
-            if (items instanceof List) {
-                return new ArrayList<>((List<String>) items);
+            if (items instanceof Collection) {
+                return new LinkedHashSet<>((Collection<String>) items);
             }
         }
-        return new ArrayList<>();
+        return new LinkedHashSet<>();
     }
 
     /**
@@ -165,9 +157,9 @@ public class PreferenceLearningHook extends ModelHook {
      * @param userId      用户 ID
      * @param preferences 偏好列表
      */
-    private void savePreferences(String userId, List<String> preferences) {
+    private void savePreferences(String userId, Set<String> preferences) {
         Map<String, Object> prefsData = new HashMap<>();
-        prefsData.put("items", preferences);
+        prefsData.put("items", new ArrayList<>(preferences)); // 转换为 List 存储以保证兼容性
 
         StoreItem item = StoreItem.of(List.of("user_data"), userId + "_preferences", prefsData);
         douyaDatabaseStore.putItem(item);
