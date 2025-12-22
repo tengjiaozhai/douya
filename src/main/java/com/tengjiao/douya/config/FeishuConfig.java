@@ -145,7 +145,20 @@ public class FeishuConfig {
                 .onP2ChatAccessEventBotP2pChatEnteredV1(new ImService.P2ChatAccessEventBotP2pChatEnteredV1Handler() {
                     @Override
                     public void handle(P2ChatAccessEventBotP2pChatEnteredV1 event) throws Exception {
-                        log.info("[用户进入应用会话], data: {}\n", Jsons.DEFAULT.toJson(event.getEvent()));
+                        String userId = event.getEvent().getOperatorId().getUserId();
+                        log.info("[用户进入应用会话] 用户ID: {}, data: {}\n", userId, Jsons.DEFAULT.toJson(event.getEvent()));
+
+                        // 异步发送欢迎语
+                        Thread.startVirtualThread(() -> {
+                            try {
+                                String welcomeMsg = eatingMasterApp.welcome(userId);
+                                FeishuTextContent content = new FeishuTextContent();
+                                content.setText(welcomeMsg);
+                                feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, "text", Jsons.DEFAULT.toJson(content), UUID.randomUUID().toString()));
+                            } catch (Exception e) {
+                                log.error("[Feishu] 发送欢迎语异常", e);
+                            }
+                        });
                     }
                 })
                 // 消息已读

@@ -16,6 +16,7 @@ import org.springframework.ai.chat.prompt.Prompt;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
@@ -145,7 +146,11 @@ public class PreferenceLearningHook extends ModelHook {
             Map<String, Object> prefsData = prefsOpt.get().getValue();
             Object items = prefsData.get("items");
             if (items instanceof Collection) {
-                return new LinkedHashSet<>((Collection<String>) items);
+                Collection<?> rawItems = (Collection<?>) items;
+                return rawItems.stream()
+                        .filter(Objects::nonNull)
+                        .map(Object::toString)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
             }
         }
         return new LinkedHashSet<>();
