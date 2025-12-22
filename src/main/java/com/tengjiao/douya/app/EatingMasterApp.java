@@ -7,6 +7,7 @@ import com.alibaba.cloud.ai.graph.store.Store;
 import com.alibaba.cloud.ai.graph.store.stores.MemoryStore;
 import com.tengjiao.douya.hook.CombinedMemoryHook;
 import com.tengjiao.douya.hook.PreferenceLearningHook;
+import com.tengjiao.douya.hook.RAGMessagesHook;
 import com.tengjiao.douya.interceptors.UserPreferInterceptors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -71,13 +72,16 @@ public class EatingMasterApp {
         // 创建用户偏好注入拦截器 (由 userId 驱动)
         UserPreferInterceptors userPreferInterceptor = new UserPreferInterceptors(douyaDatabaseStore, userId);
 
+        // 创建 RAG 增强 Hook
+        RAGMessagesHook ragMessagesHook = new RAGMessagesHook(userVectorApp);
+
         // 构建 Agent
         ReactAgent agent = ReactAgent.builder()
             .name("EatingMaster")
             .model(eatingMasterModel)
             .systemPrompt(systemPrompt)
             .instruction(instruction)
-            .hooks(preferenceLearningHook, combinedMemoryHook)
+            .hooks(preferenceLearningHook, combinedMemoryHook, ragMessagesHook)
             .interceptors(userPreferInterceptor)
             .saver(memorySaver)
             .build();

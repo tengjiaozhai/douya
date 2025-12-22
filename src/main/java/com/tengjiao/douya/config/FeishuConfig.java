@@ -71,6 +71,7 @@ public class FeishuConfig {
                 .onP2MessageReceiveV1(new ImService.P2MessageReceiveV1Handler() {
                     @Override
                     public void handle(P2MessageReceiveV1 event) throws Exception {
+                        log.info("[Feishu] 收到私聊消息: {}", Jsons.DEFAULT.toJson(event.getEvent()));
                         String json = Jsons.DEFAULT.toJson(event.getEvent());
                         FeishuMessageEvent feishuMessageEvent = Jsons.DEFAULT.fromJson(json, FeishuMessageEvent.class);
                         FeishuMessageEvent.Message message = feishuMessageEvent.getMessage();
