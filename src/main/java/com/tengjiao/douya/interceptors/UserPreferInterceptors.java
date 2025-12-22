@@ -4,86 +4,93 @@ import com.alibaba.cloud.ai.graph.agent.interceptor.ModelCallHandler;
 import com.alibaba.cloud.ai.graph.agent.interceptor.ModelInterceptor;
 import com.alibaba.cloud.ai.graph.agent.interceptor.ModelRequest;
 import com.alibaba.cloud.ai.graph.agent.interceptor.ModelResponse;
-import com.tengjiao.douya.app.UserVectorApp;
-import lombok.Data;
+import com.alibaba.cloud.ai.graph.store.Store;
+import com.alibaba.cloud.ai.graph.store.StoreItem;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.SystemMessage;
 
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
 
 /**
- * 用户偏好适配
+ * 用户偏好注入拦截器
+ * 在请求大模型之前，自动加载用户长期偏好并追加到系统提示词中
  *
  * @author tengjiao
- * @since 2025-12-10 18:31
+ * @since 2025-12-22
  */
-
+@Slf4j
 public class UserPreferInterceptors extends ModelInterceptor {
-    private final UserVectorApp userVectorApp;
 
-    public UserPreferInterceptors(UserVectorApp userVectorApp) {
-        this.userVectorApp = userVectorApp;
-    }
+    private final Store douyaDatabaseStore;
+    private final String userId;
 
-    @Data
-    public static class UserPreferences {
-        private String communicationStyle;
-        private String language;
-        private List<String> interests;
+    public UserPreferInterceptors(Store douyaDatabaseStore, String userId) {
+        this.douyaDatabaseStore = douyaDatabaseStore;
+        this.userId = userId;
     }
 
     @Override
     public ModelResponse interceptModel(ModelRequest request, ModelCallHandler next) {
-        // 从运行时上下文获取用户ID
-        String userId = getUserIdFromContext(request);
+        if (userId == null) {
+            return next.call(request);
+        }
 
-        // 从存储加载用户偏好
-        UserPreferences prefs = userVectorApp.getPreferences(userId);
+        // 1. 加载用户偏好
+        Set<String> preferences = loadPreferences(userId);
+        if (preferences.isEmpty()) {
+            return next.call(request);
+        }
 
-        // 构建个性化提示
-        String personalizedPrompt = buildPersonalizedPrompt(prefs);
+        // 2. 构建偏好提示词
+        String prefPrompt = "\n\n[已知用户偏好信息]:\n" + preferences.stream()
+                .map(p -> "- " + p)
+                .collect(Collectors.joining("\n"));
 
-        // 更新系统消息（参考 TodoListInterceptor 的实现方式）
+        // 3. 增强系统消息
         SystemMessage enhancedSystemMessage;
         if (request.getSystemMessage() == null) {
-            enhancedSystemMessage = new SystemMessage(personalizedPrompt);
+            enhancedSystemMessage = new SystemMessage(prefPrompt);
         } else {
             enhancedSystemMessage = new SystemMessage(
-                request.getSystemMessage().getText() + " " + personalizedPrompt
+                    request.getSystemMessage().getText() + prefPrompt
             );
         }
 
+        // 4. 创建新请求并继续执行
         ModelRequest updatedRequest = ModelRequest.builder(request)
-            .systemMessage(enhancedSystemMessage)
-            .build();
+                .systemMessage(enhancedSystemMessage)
+                .build();
 
+        log.info("[Interceptor] 已为用户 {} 注入偏好信息，共 {} 条", userId, preferences.size());
         return next.call(updatedRequest);
     }
 
-    private String getUserIdFromContext(ModelRequest request) {
-        // 从请求上下文提取用户ID
-        return "user_001"; // 简化示例
-    }
-
-    private String buildPersonalizedPrompt(UserPreferences prefs) {
-        StringBuilder prompt = new StringBuilder("你是一个有用的助手。");
-
-        if (prefs.getCommunicationStyle() != null) {
-            prompt.append("沟通风格：").append(prefs.getCommunicationStyle());
+    /**
+     * 加载用户偏好
+     *
+     * @param userId 用户 ID
+     * @return 偏好列表
+     */
+    private Set<String> loadPreferences(String userId) {
+        Optional<StoreItem> prefsOpt = douyaDatabaseStore.getItem(List.of("user_data"), userId + "_preferences");
+        if (prefsOpt.isPresent()) {
+            Map<String, Object> prefsData = prefsOpt.get().getValue();
+            Object items = prefsData.get("items");
+            if (items instanceof Collection) {
+                // 转换 Collection<Object> 到 Set<String>
+                Collection<?> rawItems = (Collection<?>) items;
+                return rawItems.stream()
+                        .filter(Objects::nonNull)
+                        .map(Object::toString)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+            }
         }
-
-        if (prefs.getLanguage() != null) {
-            prompt.append("使用语言：").append(prefs.getLanguage());
-        }
-
-        if (!prefs.getInterests().isEmpty()) {
-            prompt.append("用户兴趣：").append(String.join(", ", prefs.getInterests()));
-        }
-
-        return prompt.toString();
+        return new LinkedHashSet<>();
     }
 
     @Override
     public String getName() {
-        return "PersonalizedPromptInterceptor";
+        return "UserPreferenceInterceptor";
     }
 }

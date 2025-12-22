@@ -7,6 +7,7 @@ import com.alibaba.cloud.ai.graph.store.Store;
 import com.alibaba.cloud.ai.graph.store.stores.MemoryStore;
 import com.tengjiao.douya.hook.CombinedMemoryHook;
 import com.tengjiao.douya.hook.PreferenceLearningHook;
+import com.tengjiao.douya.interceptors.UserPreferInterceptors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -23,20 +24,21 @@ import org.springframework.stereotype.Component;
 @Component
 public class EatingMasterApp {
 
-    String SYSTEM_PROMPT = """
-        你是一个经验丰富的美食家。
+    protected String systemPrompt = """
+            你是一个经验丰富的美食家。
+            保持专业、暴躁、训斥、严厉的语气。
+            """;
 
-          在回答问题时,请:
-          1. 首先理解用户的核心需求
-          2. 分析可能的技术方案
-          3. 提供清晰的建议和理由
-          4. 如果需要更多信息,主动询问
+    protected String instruction = """
+            在回答问题时,请:
+            1. 首先理解用户的核心需求
+            2. 分析可能的技术方案
+            3. 提供清晰的建议和理由
+            4. 如果需要更多信息,主动询问
 
-          保持专业、暴躁、训斥、严厉的语气。
-         \s
-          输出规范 \s
-          语言要求:所有回复、思考过程及任务清单,均须使用中文。
-       \s""";
+            输出规范
+            语言要求:所有回复、思考过程及任务清单,均须使用中文。
+            """;
 
     private final ChatModel eatingMasterModel;
     private final ChatModel summaryChatModel;
@@ -62,17 +64,21 @@ public class EatingMasterApp {
     public String ask(String message, String userId) {
         // 创建偏好学习 Hook
         PreferenceLearningHook preferenceLearningHook = new PreferenceLearningHook(summaryChatModel, douyaDatabaseStore);
-//         MessageSummarizationHook messageSummarizationHook = new MessageSummarizationHook(summaryChatModel, 2000, 10);
 
         // 创建记忆结合 Hook (短期记忆10条 -> 长期存储 + AI总结向量化，每凑够10条总结一次)
         CombinedMemoryHook combinedMemoryHook = new CombinedMemoryHook(douyaDatabaseStore, summaryChatModel, userVectorApp, 10, 10);
+
+        // 创建用户偏好注入拦截器 (由 userId 驱动)
+        UserPreferInterceptors userPreferInterceptor = new UserPreferInterceptors(douyaDatabaseStore, userId);
 
         // 构建 Agent
         ReactAgent agent = ReactAgent.builder()
             .name("EatingMaster")
             .model(eatingMasterModel)
-            .instruction(SYSTEM_PROMPT)
-            .hooks(preferenceLearningHook, combinedMemoryHook) // 暂时移除 SummarizationHook，避免逻辑冲突或上下文过大
+            .systemPrompt(systemPrompt)
+            .instruction(instruction)
+            .hooks(preferenceLearningHook, combinedMemoryHook)
+            .interceptors(userPreferInterceptor)
             .saver(memorySaver)
             .build();
 
