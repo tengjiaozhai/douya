@@ -33,11 +33,11 @@ public class ModelConfig {
         return DashScopeChatModel.builder()
             .dashScopeApi(dashScopeApi)
             .defaultOptions(DashScopeChatOptions.builder()
-                .withTemperature(0.5)
-                .withMaxToken(2000)
-                .withEnableSearch(true)
-                .withTopP(0.9)
-                .withModel("qwen-plus")
+                .temperature(0.5)
+                .maxToken(2000)
+                .enableSearch(true)
+                .topP(0.9)
+                .model("qwen-plus")
                 .build())
             .build();
     }
