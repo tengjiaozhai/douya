@@ -266,6 +266,22 @@ douya
 1.  **结构化提示词**: 将 `SYSTEM_PROMPT` 拆分为 `systemPrompt` (角色设定) 与 `instruction` (任务指令)，使 Agent 性格更鲜明、业务逻辑更易维护。
 2.  **响应长度提升**: 将模型最大输出长度 (`maxTokens`) 统一提升至 **2000**，确保详细的长图文建议能完整呈现。
 
+### 多模型冲突解决
+
+由于项目中同时引入了 `spring-ai-alibaba-starter-dashscope` 和 `spring-ai-starter-model-openai`，会导致容器中存在多个 `EmbeddingModel` 实例，从而引发 `VectorStore` 自动配置冲突。
+
+**解决方案：**
+
+1.  **明确指定 Bean**: 在 `ChromaConfig` 中注入 `EmbeddingModel` 时，使用 `@Qualifier("dashscopeEmbeddingModel")` 明确指定使用 DashScope 的模型。
+2.  **禁用冲突配置**: 在 `application.yml` 中设置 `spring.ai.openai.embedding.enabled: false`，禁用 OpenAI 的 Embedding 自动配置，确保全局只有一个主嵌入模型（DashScope）。
+
+### 飞书消息资源处理
+
+支持对飞书富文本消息（如图片）的自动化处理：
+
+- **图片自动下载**: 当接收到 `image` 类型消息时，系统会通过 `FeiShuGetMessageResourceUtils` 自动将其下载并保存到项目根目录下的 `src/main/resources/temp` 路径。
+- **动态路径计算**: 使用 `ApplicationHome` 动态获取环境目录，确保在不同部署环境下均能正确识别资源存储路径。
+
 ## 开发者
 
 - **Author**: tengjiao
