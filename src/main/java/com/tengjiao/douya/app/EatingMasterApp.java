@@ -5,6 +5,7 @@ import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.store.Store;
 import com.alibaba.cloud.ai.graph.store.stores.MemoryStore;
+import com.google.common.io.Files;
 import com.tengjiao.douya.hook.CombinedMemoryHook;
 import com.tengjiao.douya.hook.PreferenceLearningHook;
 import com.tengjiao.douya.hook.RAGMessagesHook;
@@ -167,7 +168,7 @@ public class EatingMasterApp {
 
             UserMessage userMessage = UserMessage.builder()
                 .text("描述这张图片的内容。")
-                .media(Media.builder().mimeType(MimeTypeUtils.parseMimeType(mimeType)).data(file.toURI().toURL()).build())
+                .media(Media.builder().mimeType(MimeTypeUtils.parseMimeType(mimeType)).data(Files.toByteArray(file)).build())
                 .build();
 
             AssistantMessage response = visionAgent.call(userMessage, config);
