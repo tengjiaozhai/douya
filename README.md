@@ -270,3 +270,9 @@ douya
 
 - **Author**: tengjiao
 - **GitHub**: [https://github.com/tengjiao](https://github.com/tengjiao)
+
+## 更新日志
+
+### 2025-12-22
+- **优化 Agent 指令**: 在 `EatingMasterApp` 中明确了联网搜索的指令，解决了模型因系统提示词限制而拒绝使用搜索功能的幻觉问题。
+
