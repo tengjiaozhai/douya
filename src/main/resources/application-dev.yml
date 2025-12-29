@@ -25,6 +25,9 @@ spring:
                     host: http://url
                     port: 8000
                 collection-name: douya
+        openai:
+            #豆包
+            api-key: api-key
 
 feishu:
     app-id: app-id

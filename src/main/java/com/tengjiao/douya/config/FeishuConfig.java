@@ -15,14 +15,19 @@ import com.lark.oapi.ws.Client;
 import com.tengjiao.douya.app.EatingMasterApp;
 import com.tengjiao.douya.entity.feishu.FeishuMessageEvent;
 import com.tengjiao.douya.entity.feishu.FeishuMessageSendRequest;
+import com.tengjiao.douya.entity.feishu.content.FeishuImageContent;
 import com.tengjiao.douya.entity.feishu.content.FeishuTextContent;
 import com.tengjiao.douya.service.FeishuService;
+import com.tengjiao.douya.utils.FeiShuGetMessageResourceUtils;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.system.ApplicationHome;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.io.File;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
@@ -90,20 +95,63 @@ public class FeishuConfig {
 
                                 log.info("[Feishu] 开始异步处理私聊消息: {}", messageId);
 
-                                if ("text".equals(messageType)) {
-                                    FeishuTextContent feishuTextContent = Jsons.DEFAULT.fromJson(content, FeishuTextContent.class);
-                                    String userQuery = feishuTextContent.getText();
+                                switch (messageType){
+                                    case "text" -> {
+                                        FeishuTextContent feishuTextContent = Jsons.DEFAULT.fromJson(content, FeishuTextContent.class);
+                                        String userQuery = feishuTextContent.getText();
 
-                                    // 1. 立即回复“正在思考”提升用户体验
-                                    feishuTextContent.setText("稍等哦，本大师正在思考...");
-                                    feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+                                        // 1. 立即回复“正在思考”提升用户体验
+                                        feishuTextContent.setText("稍等哦，本大师正在思考...");
+                                        feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
 
-                                    // 2. 调用大模型（耗时操作）
-                                    String aiResponse = eatingMasterApp.ask(userQuery, userId);
+                                        // 2. 调用大模型（耗时操作）
+                                        String aiResponse = eatingMasterApp.ask(userQuery, userId);
 
-                                    // 3. 发送最终结果
-                                    feishuTextContent.setText(aiResponse);
-                                    feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+                                        // 3. 发送最终结果
+                                        feishuTextContent.setText(aiResponse);
+                                        feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+                                    }
+                                    case "image" -> {
+                                        FeishuImageContent feishuImageContent = Jsons.DEFAULT.fromJson(content, FeishuImageContent.class);
+                                        
+                                        // 获取项目根目录下的 src/main/resources/temp
+                                        ApplicationHome home = new ApplicationHome(getClass());
+                                        File sourceDir = home.getSource(); // 获取项目运行的 jar 包或 class 所在目录
+                                        // 假设我们在 IDE 中运行，或者需要相对于源码目录
+                                        String tempPath = sourceDir.getParentFile().getParentFile().getAbsolutePath() 
+                                                + File.separator + "src" + File.separator + "main" + File.separator + "resources" + File.separator + "temp";
+                                        
+                                        File tempDir = new File(tempPath);
+                                        if (!tempDir.exists()) {
+                                            tempDir.mkdirs();
+                                        }
+                                        
+                                        String fileName = feishuImageContent.getImageKey() + ".png";
+                                        String fullPath = tempPath + File.separator + fileName;
+                                        
+                                        log.info("[Feishu] 开始下载图片资源到: {}", fullPath);
+                                        FeiShuGetMessageResourceUtils.getMessageResource(
+                                            feishuProperties.getAppId(), 
+                                            feishuProperties.getAppSecret(),
+                                            messageId, 
+                                            feishuImageContent.getImageKey(), 
+                                            messageType, 
+                                            fullPath
+                                        );
+                                        log.info("[Feishu] 图片资源下载完成: {}", fullPath);
+
+                                        // 4. 调用视觉分析 Agent 提取信息
+                                        String visionInfo = eatingMasterApp.visionAnalyze(fullPath, userId);
+
+                                        // 5. 将提取的信息发送给 EatingMaster 进行专家创作
+                                        String prompt = "这是我拍摄的美食图片分析结果，请根据此内容为我写一段专业且有温度的点评或建议：\n" + visionInfo;
+                                        String aiResponse = eatingMasterApp.ask(prompt, userId);
+
+                                        // 6. 发送最终结果
+                                        FeishuTextContent responseContent = new FeishuTextContent();
+                                        responseContent.setText(aiResponse);
+                                        feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, "text", Jsons.DEFAULT.toJson(responseContent), UUID.randomUUID().toString()));
+                                    }
                                 }
                             } catch (Exception e) {
                                 log.error("[Feishu] 异步处理消息 {} 异常", messageId, e);

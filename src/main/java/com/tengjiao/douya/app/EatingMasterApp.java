@@ -13,7 +13,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.content.Media;
 import org.springframework.stereotype.Component;
+import org.springframework.util.MimeTypeUtils;
+
+import java.io.File;
+import java.util.List;
 
 /**
  * 吃饭大师
@@ -39,10 +44,25 @@ public class EatingMasterApp {
             4. **引导式互动**：如果信息不足，请以关怀的口吻提出启发式的问题，引导用户进一步表达想法。
             5. **联网搜索**：你的模型配置已开启联网搜索功能。当用户询问最新的流行趋势、具体店铺信息或需要实时数据时，请积极触发搜索工具，务必不要回答“我无法联网”。
 
-            输出规范
-            语言要求：所有回复、思考过程及任务清单，均须使用中文。
-            语气要求：专业而谦逊，自信且充满暖意，像一位老友在炉火旁与你促膝长谈。
-            """;
+        输出规范
+        语言要求：所有回复、思考过程及任务清单，均须使用中文。
+        语气要求：专业而谦逊，自信且充满暖意，像一位老友在炉火旁与你促膝长谈。
+        """;
+
+    protected String visionSystemPrompt = """
+        你是一个精通多模态识别的资深大厨助手。你拥有敏锐的视觉洞察力，能够从图片或视频中识别出细微的烹饪细节。
+        你的任务是客观、详尽地分析视觉媒介中的内容，并将其转化为结构化的美食描述。
+        """;
+
+    protected String visionInstruction = """
+        请从以下维度分析视觉素材：
+        1. **核心菜品**：识别出的主要菜名或食材。
+        2. **烹饪技法**：观察到的烹饪痕迹（如：油炸、清蒸、烤制、摆盘风格）。
+        3. **色彩与质感**：描述食物的色泽、酱汁的粘稠度、食材的新鲜程度感观。
+        4. **环境背景**：用餐环境（如：高档餐厅、路边摊、家庭厨房）。
+
+        请直接输出这些结构化信息，不要包含任何多余的寒暄，这些信息将被作为输入发送给另一位专家进行创作。
+        """;
 
     private final ChatModel eatingMasterModel;
     private final ChatModel summaryChatModel;
@@ -50,13 +70,14 @@ public class EatingMasterApp {
     private final UserVectorApp userVectorApp;
     private final Store memoryStore = new MemoryStore();
     private final MemorySaver memorySaver = new MemorySaver();
+    private final ChatModel readUnderstandModel;
 
-    public EatingMasterApp(ChatModel eatingMasterModel, ChatModel summaryChatModel, Store douyaDatabaseStore,
-            UserVectorApp userVectorApp) {
+    public EatingMasterApp(ChatModel eatingMasterModel, ChatModel summaryChatModel, Store douyaDatabaseStore, UserVectorApp userVectorApp, ChatModel readUnderstandModel) {
         this.eatingMasterModel = eatingMasterModel;
         this.summaryChatModel = summaryChatModel;
         this.douyaDatabaseStore = douyaDatabaseStore;
         this.userVectorApp = userVectorApp;
+        this.readUnderstandModel = readUnderstandModel;
     }
 
     /**
@@ -68,12 +89,10 @@ public class EatingMasterApp {
      */
     public String ask(String message, String userId) {
         // 创建偏好学习 Hook
-        PreferenceLearningHook preferenceLearningHook = new PreferenceLearningHook(summaryChatModel,
-                douyaDatabaseStore);
+        PreferenceLearningHook preferenceLearningHook = new PreferenceLearningHook(summaryChatModel, douyaDatabaseStore);
 
         // 创建记忆结合 Hook (短期记忆10条 -> 长期存储 + AI总结向量化，每凑够10条总结一次)
-        CombinedMemoryHook combinedMemoryHook = new CombinedMemoryHook(douyaDatabaseStore, summaryChatModel,
-                userVectorApp, 10, 10);
+        CombinedMemoryHook combinedMemoryHook = new CombinedMemoryHook(douyaDatabaseStore, summaryChatModel, userVectorApp, 10, 10);
 
         // 创建用户偏好注入拦截器 (由 userId 驱动)
         UserPreferInterceptors userPreferInterceptor = new UserPreferInterceptors(douyaDatabaseStore, userId);
@@ -83,21 +102,21 @@ public class EatingMasterApp {
 
         // 构建 Agent
         ReactAgent agent = ReactAgent.builder()
-                .name("EatingMaster")
-                .model(eatingMasterModel)
-                .systemPrompt(systemPrompt)
-                .instruction(instruction)
-                .hooks(preferenceLearningHook, combinedMemoryHook, ragMessagesHook)
-                .interceptors(userPreferInterceptor)
-                .saver(memorySaver)
-                .build();
+            .name("EatingMaster")
+            .model(eatingMasterModel)
+            .systemPrompt(systemPrompt)
+            .instruction(instruction)
+            .hooks(preferenceLearningHook, combinedMemoryHook, ragMessagesHook)
+            .interceptors(userPreferInterceptor)
+            .saver(memorySaver)
+            .build();
 
         // 构建配置
         RunnableConfig config = RunnableConfig.builder()
-                .threadId("eating_master_" + userId)
-                .addMetadata("user_id", userId)
-                .store(memoryStore) // 使用内存存储作为短期记忆
-                .build();
+            .threadId("eating_master_" + userId)
+            .addMetadata("user_id", userId)
+            .store(memoryStore) // 使用内存存储作为短期记忆
+            .build();
 
         // UserMessage 输入
         try {
@@ -108,6 +127,55 @@ public class EatingMasterApp {
         } catch (Exception e) {
             log.error("EatingMaster 调用失败", e);
             throw new RuntimeException(e.getMessage());
+        }
+    }
+
+    /**
+     * 视觉理解与信息提取
+     *
+     * @param filePath 资源路径
+     * @param userId   用户 ID
+     * @return 提取的信息
+     */
+    public String visionAnalyze(String filePath, String userId) {
+        log.info("[Vision] 开始视觉分析: {}, 用户: {}", filePath, userId);
+
+        // 构建视觉 Agent (参照 ReactAgent 模式)
+        ReactAgent visionAgent = ReactAgent.builder()
+                .name("VisionUnderstand")
+                .model(readUnderstandModel)
+                .systemPrompt(visionSystemPrompt)
+                .instruction(visionInstruction)
+                .build();
+
+        RunnableConfig config = RunnableConfig.builder()
+                .threadId("vision_" + userId)
+                .addMetadata("user_id", userId)
+                .build();
+
+        try {
+            File file = new File(filePath);
+            if (!file.exists()) {
+                throw new RuntimeException("文件不存在: " + filePath);
+            }
+
+            // 根据后缀判断 MIME (简单实现)
+            String mimeType = filePath.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
+            if (filePath.toLowerCase().endsWith(".mp4")) {
+                mimeType = "video/mp4";
+            }
+
+            UserMessage userMessage = UserMessage.builder()
+                .text("描述这张图片的内容。")
+                .media(Media.builder().mimeType(MimeTypeUtils.parseMimeType(mimeType)).data(file.toURI().toURL()).build())
+                .build();
+
+            AssistantMessage response = visionAgent.call(userMessage, config);
+            log.info("[Vision] 分析结果: {}", response.getText());
+            return response.getText();
+        } catch (Exception e) {
+            log.error("[Vision] 视觉分析失败", e);
+            return "视觉感知解析失败";
         }
     }
 
@@ -129,20 +197,8 @@ public class EatingMasterApp {
      */
     public String welcome(String userId) {
         return """
-                你好，很高兴能在这段美味的旅程中遇见你。我是你的美食老友。
-
-                无论是清晨的一碗粥，还是深夜的一盏灯，食物里总藏着我们对生活的期待。你可以和我聊聊：
-
-                情感的慰藉：‘今天工作很累，有没有哪道菜能让我感受到温柔？’
-
-                爱的传递：‘想为备考的孩子做一顿营养又开胃的晚餐，有什么建议吗？’
-
-                技艺的探索：‘为什么我煎的牛排总是锁不住肉汁？希望能帮我拆解一下细节。’
-
-                未知的迷茫：‘面对一堆陌生的香料不知所措，我们该如何赋予它们灵魂？’
-
-                告诉我，此刻你的心情如何？或者，你想从哪一道食材开始聊起？
-                """;
+            你好！我是你的美食老友。想吃点治愈的，还是想学点硬菜手艺？告诉我你此刻的心情，我们这就开聊。
+            """;
     }
 
     /**

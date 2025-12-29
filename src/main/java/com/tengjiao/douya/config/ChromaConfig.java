@@ -4,6 +4,7 @@ package com.tengjiao.douya.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.annotation.Resource;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.ai.chroma.vectorstore.ChromaApi;
 import org.springframework.ai.chroma.vectorstore.ChromaVectorStore;
 import org.springframework.ai.embedding.EmbeddingModel;
@@ -38,7 +39,7 @@ public class ChromaConfig {
     }
 
     @Bean
-    public VectorStore chromaVectorStore(EmbeddingModel dashscopeEmbeddingModel, ChromaApi chromaApi) {
+    public VectorStore chromaVectorStore(@Qualifier("dashscopeEmbeddingModel") EmbeddingModel dashscopeEmbeddingModel, ChromaApi chromaApi) {
         return ChromaVectorStore.builder(chromaApi, dashscopeEmbeddingModel)
                 .collectionName(chromaProperties.getCollectionName())
                 .databaseName("SpringAiDatabase")  // Chroma v2 需要的 database 参数
