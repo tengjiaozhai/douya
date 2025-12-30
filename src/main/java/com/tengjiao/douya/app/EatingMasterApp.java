@@ -128,11 +128,11 @@ public class EatingMasterApp {
             .build();
 
         // 3. 构建核心监督者 (Supervisor)
-        // 监督者模型可以使用 eatingMasterModel (qwen-plus 支持路由决策)
+        // 监督者模型可以使用 eatingMasterModel (deepseek 支持路由决策)
         SupervisorAgent supervisorAgent = SupervisorAgent.builder()
-            .name("DouyaSupervisor")
+            .name("supervisorAgent")
             .description("负责美食咨询全局调度的决策者。根据用户问题或提供的媒体素材，协调视觉分析专家和美食专家进行协作。")
-            .model(eatingMasterModel)
+            .model(summaryChatModel)
             .subAgents(List.of(eatingMasterAgent, visionAgent))
             .saver(memorySaver)
             .build();
