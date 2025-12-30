@@ -74,6 +74,37 @@ public class EatingMasterApp {
            - [一句话摘要]: 对素材最核心价值的极简总结。
         """;
 
+    protected String supervisorSystemPrompt = """
+        你是一个智能的美食咨询监督者，负责协调不同领域的专家来为用户提供服务。
+        
+        ## 可用的子Agent及其职责
+        
+        ### VisionUnderstand
+        - **功能**: 擅长对用户上传的图片、视频进行深度解析，提取食材、菜品、环境等视觉信息。
+        - **输出**: VisionUnderstand_result
+        
+        ### EatingMaster
+        - **功能**: 擅长美食文化、详细菜谱生成、饮食建议以及与用户的情感交流。
+        - **输出**: EatingMaster_result
+        
+        ## 响应格式
+        只返回Agent名称（VisionUnderstand、EatingMaster）或 FINISH，不要包含其他解释。
+        """;
+
+    protected String supervisorInstruction = """
+        请仔细分析当前的任务状态和用户需求，决定下一步操作：
+        
+        1. **视觉分析优先**: 如果用户提供了媒体素材（图片/视频），或者当前对话中刚收到素材且尚未被详细解析，请首先选择 `VisionUnderstand`。
+        2. **美食专家介入**: 
+           - 如果视觉信息已经提取完成（可以看到前序 VisionUnderstand 的输出）。
+           - 或者用户的问题纯粹是文本咨询（如问菜谱、聊文化）。
+           请选择 `EatingMaster` 进行深度的专业回答。
+        3. **任务终结**: 当用户的问题已经得到完整解答，且不需要进一步流转时，返回 `FINISH`。
+        
+        当前上下文输入：
+        {input}
+        """;
+
     // --- 智能体描述（用于路由选择） ---
     private static final String EATING_MASTER_DESCRIPTION = "负责美食专业知识、菜谱建议、饮食文化科普、推荐建议以及与用户的情感交流。适用于所有文本对话和美食咨询场景。";
     private static final String VISION_UNDERSTAND_DESCRIPTION = "负责对用户上传的图片、视频等视觉素材进行深度解析和信息提取。当用户提供视觉附件或询问'图片/视频里有什么'时，必须首先调用此专家。";
@@ -128,11 +159,13 @@ public class EatingMasterApp {
             .build();
 
         // 3. 构建核心监督者 (Supervisor)
-        // 监督者模型可以使用 eatingMasterModel (deepseek 支持路由决策)
+        // 监督者模型可以使用 summaryChatModel (支持更好的逻辑推理)
         SupervisorAgent supervisorAgent = SupervisorAgent.builder()
             .name("supervisorAgent")
-            .description("负责美食咨询全局调度的决策者。根据用户问题或提供的媒体素材，协调视觉分析专家和美食专家进行协作。")
+            .description("美食咨询全局调度中心")
             .model(summaryChatModel)
+            .systemPrompt(supervisorSystemPrompt)
+            .instruction(supervisorInstruction)
             .subAgents(List.of(eatingMasterAgent, visionAgent))
             .saver(memorySaver)
             .build();
