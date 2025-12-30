@@ -19,7 +19,11 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
 import java.io.File;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+
+import static com.alibaba.cloud.ai.graph.store.StoreItem.*;
 
 /**
  * 吃饭大师
@@ -51,18 +55,21 @@ public class EatingMasterApp {
         """;
 
     protected String visionSystemPrompt = """
-        你是一个精通多模态识别的资深大厨助手。你拥有敏锐的视觉洞察力，能够从图片或视频中识别出细微的烹饪细节。
-        你的任务是客观、详尽地分析视觉媒介中的内容，并将其转化为结构化的美食描述。
+        你是一个精通多模态识别的资深视觉分析专家。你拥有极强的观察力与客观描述能力，能够从图像或视频中提取出精确的关键信息。
+        你的任务是将复杂的视觉信号转化为详尽、客观且结构化的文本描述，为后续的专家创作提供最真实的基础素材。
         """;
 
     protected String visionInstruction = """
-        请从以下维度分析视觉素材：
-        1. **核心菜品**：识别出的主要菜名或食材。
-        2. **烹饪技法**：观察到的烹饪痕迹（如：油炸、清蒸、烤制、摆盘风格）。
-        3. **色彩与质感**：描述食物的色泽、酱汁的粘稠度、食材的新鲜程度感观。
-        4. **环境背景**：用餐环境（如：高档餐厅、路边摊、家庭厨房）。
+        请以【最高信息密度】分析素材，严格遵守以下规范：
+        1. **严禁开场白**：禁止使用“这是一张...”、“图片显示...”、“如下信息：”等任何引导性话语，直接输出数据。
+        2. **纯粹事实**：禁用“我看到”、“显示出”等第一人称或冗余动词，确保文字精炼。
+        3. **结构化格式**：
+           - [核心主体]: 名称/类别/主要焦点。
+           - [关键细节]: 提取文字字段、品牌、颜色、核心特征（逗号分隔）。
+           - [环境背景]: 场景、当前状态、光影或动作。
+           - [一句话摘要]: 对素材最核心价值的极简总结（20字以内）。
 
-        请直接输出这些结构化信息，不要包含任何多余的寒暄，这些信息将被作为输入发送给另一位专家进行创作。
+        目标：输出内容将作为下游 AI 的原始输入，必须最大化原始信息的纯度与 Token 利用率。
         """;
 
     private final ChatModel eatingMasterModel;
@@ -134,12 +141,13 @@ public class EatingMasterApp {
     /**
      * 视觉理解与信息提取
      *
-     * @param filePath 资源路径
-     * @param userId   用户 ID
+     * @param filePath  资源路径
+     * @param userQuery 用户意图描述
+     * @param userId    用户 ID
      * @return 提取的信息
      */
-    public String visionAnalyze(String filePath, String userId) {
-        log.info("[Vision] 开始视觉分析: {}, 用户: {}", filePath, userId);
+    public String visionAnalyze(String filePath, String userQuery, String userId) {
+        log.info("[Vision] 开始视觉分析: {}, 意图: {}, 用户: {}", filePath, userQuery, userId);
 
         // 构建视觉 Agent (参照 ReactAgent 模式)
         ReactAgent visionAgent = ReactAgent.builder()
@@ -167,7 +175,7 @@ public class EatingMasterApp {
             }
 
             UserMessage userMessage = UserMessage.builder()
-                .text("描述这张图片的内容。")
+                .text(userQuery)
                 .media(Media.builder().mimeType(MimeTypeUtils.parseMimeType(mimeType)).data(Files.toByteArray(file)).build())
                 .build();
 
@@ -209,5 +217,33 @@ public class EatingMasterApp {
      */
     public Store getMemoryStore() {
         return douyaDatabaseStore;
+    }
+
+    /**
+     * 记录待处理的图片路径
+     */
+    public void setPendingImage(String userId, String filePath) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("path", filePath);
+        data.put("timestamp", System.currentTimeMillis());
+        douyaDatabaseStore.putItem(of(List.of("pending_activity"), userId + "_image_path", data));
+    }
+
+    /**
+     * 获取待处理的图片路径
+     */
+    public String getPendingImage(String userId) {
+        return douyaDatabaseStore.getItem(List.of("pending_activity"), userId + "_image_path")
+                .map(item -> (String) item.getValue().get("path"))
+                .orElse(null);
+    }
+
+    /**
+     * 清除待处理的图片路径
+     */
+    public void clearPendingImage(String userId) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("path", null);
+        douyaDatabaseStore.putItem(of(List.of("pending_activity"), userId + "_image_path", data));
     }
 }

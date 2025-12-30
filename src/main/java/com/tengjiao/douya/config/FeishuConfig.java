@@ -100,24 +100,43 @@ public class FeishuConfig {
                                         FeishuTextContent feishuTextContent = Jsons.DEFAULT.fromJson(content, FeishuTextContent.class);
                                         String userQuery = feishuTextContent.getText();
 
-                                        // 1. 立即回复“正在思考”提升用户体验
-                                        feishuTextContent.setText("稍等哦，本大师正在思考...");
-                                        feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+                                        // 检查是否有待处理的图片
+                                        String pendingImagePath = eatingMasterApp.getPendingImage(userId);
+                                        if (pendingImagePath != null && !pendingImagePath.isEmpty()) {
+                                            log.info("[Feishu] 发现用户 {} 有待处理图片，开始结合处理", userId);
+                                            
+                                            // 1. 立即回复“正在分析”
+                                            feishuTextContent.setText("收到！正在结合你刚才发的图片进行深度分析...");
+                                            feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
 
-                                        // 2. 调用大模型（耗时操作）
-                                        String aiResponse = eatingMasterApp.ask(userQuery, userId);
+                                            // 2. 调用视觉分析 + 专家对话
+                                            String visionInfo = eatingMasterApp.visionAnalyze(pendingImagePath, userQuery, userId);
+                                            String aiResponse = eatingMasterApp.ask(visionInfo, userId);
 
-                                        // 3. 发送最终结果
-                                        feishuTextContent.setText(aiResponse);
-                                        feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+                                            // 3. 发送最终结果并清除状态
+                                            feishuTextContent.setText(aiResponse);
+                                            feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+                                            eatingMasterApp.clearPendingImage(userId);
+                                        } else {
+                                            // 正常聊天流程
+                                            // 1. 立即回复“正在思考”
+                                            feishuTextContent.setText("稍等哦，本大师正在思考...");
+                                            feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+
+                                            // 2. 调用大模型（耗时操作）
+                                            String aiResponse = eatingMasterApp.ask(userQuery, userId);
+
+                                            // 3. 发送最终结果
+                                            feishuTextContent.setText(aiResponse);
+                                            feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+                                        }
                                     }
                                     case "image" -> {
                                         FeishuImageContent feishuImageContent = Jsons.DEFAULT.fromJson(content, FeishuImageContent.class);
                                         
                                         // 获取项目根目录下的 src/main/resources/temp
                                         ApplicationHome home = new ApplicationHome(getClass());
-                                        File sourceDir = home.getSource(); // 获取项目运行的 jar 包或 class 所在目录
-                                        // 假设我们在 IDE 中运行，或者需要相对于源码目录
+                                        File sourceDir = home.getSource(); 
                                         String tempPath = sourceDir.getParentFile().getParentFile().getAbsolutePath() 
                                                 + File.separator + "src" + File.separator + "main" + File.separator + "resources" + File.separator + "temp";
                                         
@@ -140,16 +159,13 @@ public class FeishuConfig {
                                         );
                                         log.info("[Feishu] 图片资源下载完成: {}", fullPath);
 
-                                        // 4. 调用视觉分析 Agent 提取信息
-                                        String visionInfo = eatingMasterApp.visionAnalyze(fullPath, userId);
+                                        // 暂存图片路径，不立即分析
+                                        eatingMasterApp.setPendingImage(userId, fullPath);
 
-                                        // 5. 将提取的信息发送给 EatingMaster 进行专家创作
-                                        String prompt = "这是我拍摄的美食图片分析结果，请根据此内容为我写一段专业且有温度的点评或建议：\n" + visionInfo;
-                                        String aiResponse = eatingMasterApp.ask(prompt, userId);
-
-                                        // 6. 发送最终结果
+                                        // 回复用户，引导表达意图
                                         FeishuTextContent responseContent = new FeishuTextContent();
-                                        responseContent.setText(aiResponse);
+                                        String welcomeBack = "收到图片啦！📸\n你想让我针对这张图帮你做点什么？（比如分析它的内容、识别文字，或者告诉我你此刻的想法）";
+                                        responseContent.setText(welcomeBack);
                                         feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, "text", Jsons.DEFAULT.toJson(responseContent), UUID.randomUUID().toString()));
                                     }
                                 }

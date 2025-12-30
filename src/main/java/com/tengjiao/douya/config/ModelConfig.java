@@ -13,8 +13,6 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 
 /**
  * 模型配置
@@ -35,56 +33,54 @@ public class ModelConfig {
     @Bean
     public ChatModel eatingMasterModel() {
         DashScopeApi dashScopeApi = DashScopeApi.builder()
-                .apiKey(apiKey)
-                .build();
+            .apiKey(apiKey)
+            .build();
         return DashScopeChatModel.builder()
-                .dashScopeApi(dashScopeApi)
-                .defaultOptions(DashScopeChatOptions.builder()
-                        .temperature(0.5)
-                        .maxToken(2000)
-                        .enableSearch(true)
-                        .topP(0.9)
-                        .model("qwen-plus")
-                        .build())
-                .build();
+            .dashScopeApi(dashScopeApi)
+            .defaultOptions(DashScopeChatOptions.builder()
+                .temperature(0.5)
+                .maxToken(2000)
+                .enableSearch(true)
+                .topP(0.9)
+                .model("qwen-plus")
+                .build())
+            .build();
     }
 
     @Bean
     public ChatModel summaryChatModel() {
         DeepSeekApi deepSeekApi = DeepSeekApi.builder()
-                .apiKey(deepseekApiKey)
-                .build();
+            .apiKey(deepseekApiKey)
+            .build();
         DeepSeekChatOptions deepSeekChatOptions = DeepSeekChatOptions.builder()
-                .model(DeepSeekApi.ChatModel.DEEPSEEK_REASONER.getValue())
-                .maxTokens(2000)
-                .temperature(0.5)
-                .topP(0.9)
-                .build();
+            .model(DeepSeekApi.ChatModel.DEEPSEEK_REASONER.getValue())
+            .maxTokens(2000)
+            .temperature(0.5)
+            .topP(0.9)
+            .build();
         return DeepSeekChatModel.builder()
-                .deepSeekApi(deepSeekApi)
-                .defaultOptions(deepSeekChatOptions)
-                .build();
+            .deepSeekApi(deepSeekApi)
+            .defaultOptions(deepSeekChatOptions)
+            .build();
     }
 
     // 全模态模型
     @Bean
     public ChatModel readUnderstandModel() {
-        MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
-        headers.add("Authorization", "Bearer " + douBaoApiKey);
         OpenAiApi openAiApi = OpenAiApi.builder()
-                .baseUrl("https://ark.cn-beijing.volces.com/api/v3/chat/completions")
-                .headers(headers)
-                .apiKey(douBaoApiKey)
-                .build();
+            .baseUrl("https://ark.cn-beijing.volces.com/api/v3")
+            .completionsPath("/chat/completions")
+            .apiKey(douBaoApiKey)
+            .build();
         OpenAiChatOptions openAiChatOptions = OpenAiChatOptions.builder()
-                .model("Doubao-Seed-1.8")
-                .maxTokens(2000)
-                .temperature(0.5)
-                .topP(0.9)
-                .build();
+            .model("ep-m-20251230093804-s8sdg")
+            .maxTokens(2000)
+            .temperature(0.5)
+            .topP(0.9)
+            .build();
         return OpenAiChatModel.builder()
-                .openAiApi(openAiApi)
-                .defaultOptions(openAiChatOptions)
-                .build();
+            .openAiApi(openAiApi)
+            .defaultOptions(openAiChatOptions)
+            .build();
     }
 }
