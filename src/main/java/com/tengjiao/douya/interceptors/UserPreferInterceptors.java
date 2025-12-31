@@ -49,7 +49,7 @@ public class UserPreferInterceptors extends ModelInterceptor {
 
         // 3. 增强系统消息
         SystemMessage enhancedSystemMessage;
-        if (request.getSystemMessage() == null) {
+         if (request.getSystemMessage() == null) {
             enhancedSystemMessage = new SystemMessage(prefPrompt);
         } else {
             enhancedSystemMessage = new SystemMessage(

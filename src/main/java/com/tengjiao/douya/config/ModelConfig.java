@@ -3,6 +3,7 @@ package com.tengjiao.douya.config;
 import com.alibaba.cloud.ai.dashscope.api.DashScopeApi;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatModel;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
+import com.alibaba.cloud.ai.dashscope.spec.DashScopeApiSpec;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.deepseek.DeepSeekChatModel;
 import org.springframework.ai.deepseek.DeepSeekChatOptions;
@@ -41,6 +42,7 @@ public class ModelConfig {
                 .temperature(0.5)
                 .maxToken(2000)
                 .enableSearch(true)
+                .searchOptions(DashScopeApiSpec.SearchOptions.builder().forcedSearch(true).build())
                 .topP(0.9)
                 .model("qwen-plus")
                 .build())
@@ -54,7 +56,7 @@ public class ModelConfig {
             .build();
         DeepSeekChatOptions deepSeekChatOptions = DeepSeekChatOptions.builder()
             .model(DeepSeekApi.ChatModel.DEEPSEEK_REASONER.getValue())
-            .maxTokens(2000)
+            .maxTokens(200)
             .temperature(0.5)
             .topP(0.9)
             .build();
