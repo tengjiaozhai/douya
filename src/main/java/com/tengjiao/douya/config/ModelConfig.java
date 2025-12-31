@@ -56,7 +56,7 @@ public class ModelConfig {
             .build();
         DeepSeekChatOptions deepSeekChatOptions = DeepSeekChatOptions.builder()
             .model(DeepSeekApi.ChatModel.DEEPSEEK_REASONER.getValue())
-            .maxTokens(200)
+            .maxTokens(2000)
             .temperature(0.5)
             .topP(0.9)
             .build();
@@ -75,7 +75,7 @@ public class ModelConfig {
             .apiKey(douBaoApiKey)
             .build();
         OpenAiChatOptions openAiChatOptions = OpenAiChatOptions.builder()
-            .model("ep-m-20251230093804-s8sdg")
+            .model("ep-m-20251231164855-d8jn2")
             .maxTokens(2000)
             .temperature(0.5)
             .topP(0.9)
