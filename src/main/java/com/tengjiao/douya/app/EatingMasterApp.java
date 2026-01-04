@@ -1,5 +1,6 @@
 package com.tengjiao.douya.app;
 
+import com.alibaba.cloud.ai.graph.CompileConfig;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.flow.agent.SupervisorAgent;
@@ -17,6 +18,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.content.Media;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
@@ -41,14 +43,14 @@ public class EatingMasterApp {
     // --- 提示词保持不变 ---
     protected String eatingMasterSystemPrompt = """
             你是一位享誉业界的资深美食专家，作为 **Douya 多模态智能体团队** 的核心成员，你不仅精通烹饪技艺与饮食文化，更具备极高的情商与同理心。
-            
+
             **关于视觉能力的重要认知**：
             虽然你主要负责文本对话，但你的团队拥有顶尖的视觉分析专家。**永远不要说“我看不见”或“我无法理解图片”**。
             当用户提到图片、发了图片或询问视觉相关问题时，你应该自信地表现出你是具备视觉感知能力的（因为你的队友会把分析结果传给你）。
-            
+
             **关于团队角色**：
             你是整个 "Douya" 智能体团队的主理人和接待员。当用户问“你是谁”、“你能做什么”时，请大方地介绍你自己和你的视觉专家队友。
-            
+
             你的语言风格优雅、温和且富有感染力。在交流中，你不仅是知识的传播者，更是用户情绪的抚慰者。
             你擅长站在用户的角度思考，能够敏锐地察觉用户在字里行间流露出的情感需求。
             """;
@@ -91,46 +93,46 @@ public class EatingMasterApp {
 
     protected String supervisorSystemPrompt = """
         你是一个智能的美食咨询监督者，负责协调不同领域的专家来为用户提供服务。
-        
+
         ## 可用的子Agent及其职责
-        
+
         ### VisionUnderstand
         - **功能**: 擅长对用户上传的图片、视频进行深度解析，提取食材、菜品、环境等视觉信息。
         - **输出**: VisionUnderstand_result
-        
+
         ### EatingMaster
         - **功能**: 擅长美食文化、详细菜谱生成、饮食建议以及与用户的情感交流。
         - **输出**: EatingMaster_result
-        
+
         ## 响应格式
         只返回Agent名称（VisionUnderstand、EatingMaster）或 FINISH，不要包含其他解释。
         """;
 
     protected String supervisorInstruction = """
         请仔细分析当前的任务状态和用户需求，以及 **前序步骤的执行结果**（非常重要），决定下一步操作：
-        
+
         1. **防死循环机制 (绝对优先)**:
-           - **检查上一条消息**: 
+           - **检查上一条消息**:
              - 如果是 `EatingMaster` 的发言 -> **立刻 FINISH**。
              - 如果是 `VisionUnderstand` 的发言 -> **禁止**再次调用 `VisionUnderstand`。
                - 无论它返回什么（包括“无素材”），都**禁止**重复询问它。
                - 如果你想安慰用户，路由给 `EatingMaster`；否则直接 `FINISH`。
            - **全局禁止**: 严禁在同一次处理中连续重复调用同一个子 Agent。
-        
+
         2. **视觉相关请求 (VisionUnderstand)**:
            - **必须满足**：用户发送了图片/视频文件，或者上下文中包含需要分析的且未过期的视觉素材。
            - **明确指向**：用户明确要求“分析这张图”、“看左边的角落” (且图已存在)。
            - **注意**：如果用户只是问“你会看图吗”、“能不能识别图片”等**能力询问**，请路由给 **EatingMaster**，不要路由给 VisionUnderstand。
-        
-        3. **美食专家介入 (EatingMaster)**: 
+
+        3. **美食专家介入 (EatingMaster)**:
            - 视觉信息已提取完成 (VisionUnderstand 已执行完毕)。
            - **能力询问**：用户问“你会看图吗”、“你懂视频吗”。
            - 接待与介绍（“你是谁”）。
            - 纯文本的美食咨询、菜谱询问、闲聊。
-           
-        4. **任务终结 (FINISH)**: 
+
+        4. **任务终结 (FINISH)**:
            - 默认操作。如果不符合上述路由条件，或任务已完成，返回 FINISH。
-        
+
         当前上下文输入：
         {input}
         """;
@@ -147,13 +149,16 @@ public class EatingMasterApp {
 
     private final Store memoryStore = new MemoryStore();
     private final MemorySaver memorySaver = new MemorySaver();
+    private final ToolCallbackProvider toolCallbackProvider;
 
-    public EatingMasterApp(ChatModel eatingMasterModel, ChatModel summaryChatModel, Store douyaDatabaseStore, UserVectorApp userVectorApp, ChatModel readUnderstandModel) {
+    public EatingMasterApp(ChatModel eatingMasterModel, ChatModel summaryChatModel, Store douyaDatabaseStore, UserVectorApp userVectorApp, ChatModel readUnderstandModel,
+                           ToolCallbackProvider toolCallbackProvider) {
         this.eatingMasterModel = eatingMasterModel;
         this.summaryChatModel = summaryChatModel;
         this.douyaDatabaseStore = douyaDatabaseStore;
         this.userVectorApp = userVectorApp;
         this.readUnderstandModel = readUnderstandModel;
+        this.toolCallbackProvider = toolCallbackProvider;
     }
 
     /**
@@ -175,6 +180,7 @@ public class EatingMasterApp {
             .hooks(preferenceLearningHook, combinedMemoryHook, ragMessagesHook)
             .interceptors(userPreferInterceptor)
             .outputKey("EatingMaster")
+            .tools(toolCallbackProvider.getToolCallbacks())
             .build();
 
         ReactAgent visionAgent = ReactAgent.builder()
@@ -186,10 +192,12 @@ public class EatingMasterApp {
             .hooks(preferenceLearningHook, combinedMemoryHook, ragMessagesHook)
             .interceptors(userPreferInterceptor)
             .outputKey("VisionUnderstand")
+            .tools(toolCallbackProvider.getToolCallbacks())
             .build();
 
         // 3. 构建核心监督者 (Supervisor)
         // 监督者模型可以使用 summaryChatModel (支持更好的逻辑推理)
+        CompileConfig compileConfig = CompileConfig.builder().recursionLimit(5).build();
         SupervisorAgent supervisorAgent = SupervisorAgent.builder()
             .name("supervisorAgent")
             .description("美食咨询全局调度中心")
@@ -197,6 +205,7 @@ public class EatingMasterApp {
             .systemPrompt(supervisorSystemPrompt)
             .instruction(supervisorInstruction)
             .subAgents(List.of(eatingMasterAgent, visionAgent))
+            .compileConfig(compileConfig)
             .saver(memorySaver)
             .build();
 
@@ -211,7 +220,7 @@ public class EatingMasterApp {
         try {
             log.info("[Multi-Agent] 开始处理请求, 用户: {}, 消息: {}", userId, userMessage.getText());
             Optional<OverAllState> invoke = supervisorAgent.invoke(userMessage, config);
-            
+
             if (invoke.isPresent()) {
                 OverAllState state = invoke.get();
                 // 1. 优先尝试获取 EatingMaster 的输出 (通常是最终回复)
@@ -222,7 +231,7 @@ public class EatingMasterApp {
                         return am.getText();
                     }
                 }
-                
+
                 // 2. 如果没有 EatingMaster，尝试获取 VisionUnderstand 的输出
                 if (state.data().containsKey("VisionUnderstand")) {
                     Object output = state.data().get("VisionUnderstand");
@@ -231,7 +240,7 @@ public class EatingMasterApp {
                         return am.getText();
                     }
                 }
-                
+
                 // 3. Fallback: 如果都没有，返回整个 state 的 toString (调试用), 或一个友好提示
                 log.warn("[Multi-Agent] 未找到子Agent的标准输出，返回 State: {}", state.data());
                 return "抱歉，我似乎没有组织好语言。(System State: " + state.data() + ")";
@@ -266,10 +275,14 @@ public class EatingMasterApp {
         log.info("[Vision] 接收到视觉任务: {}, 意图: {}", filePath, userQuery);
         try {
             File file = new File(filePath);
-            if (!file.exists()) throw new RuntimeException("文件不存在: " + filePath);
+            if (!file.exists()) {
+                throw new RuntimeException("文件不存在: " + filePath);
+            }
 
             String mimeType = filePath.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
-            if (filePath.toLowerCase().endsWith(".mp4")) mimeType = "video/mp4";
+            if (filePath.toLowerCase().endsWith(".mp4")) {
+                mimeType = "video/mp4";
+            }
 
             UserMessage userMessage = UserMessage.builder()
                 .text(userQuery)
@@ -279,7 +292,9 @@ public class EatingMasterApp {
                     .build())
                 .build();
 
-            return process(userMessage, userId);
+            String process = process(userMessage, userId);
+            file.delete();
+            return process;
         } catch (Exception e) {
             log.error("[Vision] 视觉分析预处理失败", e);
             return "视觉感知解析失败";
