@@ -333,3 +333,8 @@ douya
 ### 2025-12-22
 
 - **优化 Agent 指令**: 在 `EatingMasterApp` 中明确了联网搜索的指令，解决了模型因系统提示词限制而拒绝使用搜索功能的幻觉问题。
+
+### 2026-01-04
+
+- **解决 uvx 工具链安装问题**: 针对 `pip install uvx` 报错（防御性占位包）的问题，通过正确安装 `uv` 核心包来提供 `uvx` 命令支持。
+- **配置 Windows 适配的 MCP Server**: 修改 `mcp-servers.json`，将 `xiaohongshu-automation` 服务配置为使用 `cmd.exe /c` 调用 `uvx`，以确保在 Windows 环境下的兼容性。

@@ -16,6 +16,11 @@ spring:
     vectorstore:
       observations:
         log-query-response: true
+    mcp:
+      client:
+        enabled: true
+        stdio:
+          servers-configuration: classpath:mcp-servers.json
 
 logging:
   level:
