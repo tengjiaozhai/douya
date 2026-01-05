@@ -28,6 +28,11 @@ spring:
         openai:
             #豆包
             api-key: api-key
+        mcp:
+            client:
+                enabled: true
+                stdio:
+                    servers-configuration: classpath:mcp-servers-system.json
 
 feishu:
     app-id: app-id
