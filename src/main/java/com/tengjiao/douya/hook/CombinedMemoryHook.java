@@ -15,6 +15,8 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.document.Document;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
@@ -133,39 +135,30 @@ public class CombinedMemoryHook extends ModelHook {
     }
 
     private void archiveMessages(String userId, List<Message> messages) {
-        // 定义长期记忆的存储 Key
-        List<String> namespace = List.of("memory", "archive");
+        // 定义长期记忆的存储 Namespace
+        List<String> namespace = List.of("memory", "archive", "raw");
 
         try {
-            // 加载现有的归档（如果存在）
-            Optional<StoreItem> existingOpt = longTermStore.getItem(namespace, userId);
-            List<Message> archivedHistory = new ArrayList<>();
+            LocalDateTime now = LocalDateTime.now();
+            String dateStr = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
 
-            if (existingOpt.isPresent()) {
-                Map<String, Object> data = existingOpt.get().getValue();
-                if (data.containsKey("messages")) {
-                    Object msgsObj = data.get("messages");
-                    if (msgsObj instanceof List) {
-                        // 注意：这里反序列化可能需要额外处理，暂时假设 Store 能够正确处理 Message 类型
-                        archivedHistory.addAll((List<Message>) msgsObj);
-                    }
-                }
+            // 将消息逐一拆分存储，避免单个 Key 下的数据量无限增长
+            for (int i = 0; i < messages.size(); i++) {
+                Message msg = messages.get(i);
+                String formattedKey = userId + "_" + dateStr + "_" + i;
+                
+                Map<String, Object> data = new HashMap<>();
+                data.put("text", msg.getText());
+                data.put("role", msg.getMessageType().getValue());
+                data.put("timestamp", System.currentTimeMillis());
+
+                // 使用 userId + 易读日期 + 索引作为 Key
+                StoreItem item = StoreItem.of(namespace, formattedKey, data);
+                longTermStore.putItem(item);
             }
-
-            // 追加新归档的消息
-            archivedHistory.addAll(messages);
-
-            // 保存回长期存储
-            Map<String, Object> value = new HashMap<>();
-            value.put("messages", archivedHistory);
-            value.put("updated_at", System.currentTimeMillis());
-
-            StoreItem item = StoreItem.of(namespace, userId, value);
-            longTermStore.putItem(item);
-
+            log.info("Archived {} raw messages for user {} into separate storage with date keys.", messages.size(), userId);
         } catch (Exception e) {
-            log.error("Failed to archive messages for user " + userId, e);
-            // 即使归档失败，也建议不要阻断主流程，但可能会导致数据丢失
+            log.error("Failed to archive raw messages for user " + userId, e);
         }
     }
 }

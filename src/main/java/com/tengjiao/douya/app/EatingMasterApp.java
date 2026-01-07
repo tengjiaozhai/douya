@@ -22,6 +22,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
 import java.io.File;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -217,13 +219,13 @@ public class EatingMasterApp {
             log.info("[Multi-Agent] 开始处理请求, 用户: {}, 消息: {}", userId, userMessage.getText());
             // 编译并运行
             CompiledGraph graph = eatingMasterGraph.createGraph();
-            
+
             // 初始化状态，包含路由计数和历史
             Map<String, Object> initialState = new HashMap<>();
             initialState.put("messages", List.of(userMessage));
             initialState.put("routing_count", 0);
             initialState.put("routing_history", List.of());
-            
+
             Optional<OverAllState> invoke = graph.invoke(initialState, config);
 
             if (invoke.isPresent()) {
@@ -248,7 +250,7 @@ public class EatingMasterApp {
 
                 // 3. Fallback: 如果都没有，返回整个 state 的 toString (调试用), 或一个友好提示
                 log.warn("[Multi-Agent] 未找到子Agent的标准输出，返回 State: {}", state.data());
-                return "抱歉，我似乎没有组织好语言。(System State: " + state.data() + ")";
+                return "抱歉，我的大脑暂时断片了";
             }
             return "抱歉，我的大脑暂时断片了";
         } catch (Exception e) {
@@ -258,11 +260,20 @@ public class EatingMasterApp {
     }
 
     private void saveReplyToMemory(String userId, String text) {
-        log.info("[Multi-Agent] 最终回复: {}", text);
+        LocalDateTime now = LocalDateTime.now();
+        String formattedKey = userId + "_" + now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+
+        log.info("[Multi-Agent] 记录回复 [Key: {}]: {}", formattedKey, text);
+
         Map<String, Object> data = new HashMap<>();
         data.put("text", text);
         data.put("timestamp", System.currentTimeMillis());
-        douyaDatabaseStore.putItem(of(List.of("eating_master"), userId + "_reply", data));
+        data.put("role", "assistant");
+
+        // 长期存储：使用易读的日期格式 Key
+        douyaDatabaseStore.putItem(of(List.of("eating_master", "history"), formattedKey, data));
+
+        // 短期存储
         memoryStore.putItem(of(List.of("eating_master"), userId + "_reply", data));
     }
 

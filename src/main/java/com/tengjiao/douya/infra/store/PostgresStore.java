@@ -32,21 +32,44 @@ public class PostgresStore implements Store {
     }
 
     private void initTable() {
-        String sql = String.format("""
+        // 1. 尝试创建目标表 (如果完全不存在)
+        // 注意：新结构增加了 id 作为主键，原有的 (namespace, access_key) 转为唯一约束
+        String createTableSql = String.format("""
                     CREATE TABLE IF NOT EXISTS %s (
+                        id BIGSERIAL PRIMARY KEY,
                         namespace text NOT NULL,
                         access_key text NOT NULL,
                         value jsonb,
                         created_at timestamp DEFAULT now(),
                         updated_at timestamp DEFAULT now(),
-                        PRIMARY KEY (namespace, access_key)
+                        UNIQUE (namespace, access_key)
                     )
                 """, tableName);
         try {
-            jdbcTemplate.execute(sql);
-            log.info("Initialized PostgresStore table: {}", tableName);
+            jdbcTemplate.execute(createTableSql);
+            
+            // 2. 迁移逻辑：针对旧表进行增量升级
+            // 检查 id 列是否存在 (注意 table_name 在 info schema 中通常为小写)
+            String targetTable = tableName.toLowerCase();
+            String checkIdSql = "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = ? AND column_name = 'id'";
+            Integer count = jdbcTemplate.queryForObject(checkIdSql, Integer.class, targetTable);
+            
+            if (count == null || count == 0) {
+                log.info("检测到旧版表结构 [{}], 正在启动平滑迁移...", tableName);
+                
+                // a. 移除旧的复合主键约束 (PG 默认名为 table_pkey)
+                jdbcTemplate.execute(String.format("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s_pkey", tableName, tableName));
+                
+                // b. 添加自增 ID 列并设为主键
+                jdbcTemplate.execute(String.format("ALTER TABLE %s ADD COLUMN id BIGSERIAL PRIMARY KEY", tableName));
+                
+                // c. 将原来的逻辑主键补充为唯一约束，以维持 ON CONFLICT 逻辑
+                jdbcTemplate.execute(String.format("ALTER TABLE %s ADD CONSTRAINT %s_ns_key_unique UNIQUE (namespace, access_key)", tableName, tableName));
+                
+                log.info("表结构迁移成功: [{}] 已升级为带 id 主键的模型。", tableName);
+            }
         } catch (Exception e) {
-            log.error("Failed to initialize table " + tableName, e);
+            log.error("初始化或迁移数据库表 " + tableName + " 失败", e);
         }
     }
 
@@ -153,6 +176,65 @@ public class PostgresStore implements Store {
 
     @Override
     public StoreSearchResult searchItems(StoreSearchRequest request) {
-        return null;
+        String nsJson = serializeNamespace(request.getNamespace());
+        String keyPrefix = request.getFilter().get("key_prefix") != null ? (String) request.getFilter().get("key_prefix") : "";
+        
+        String sql = String.format("SELECT * FROM %s WHERE namespace = ? AND access_key LIKE ? ORDER BY id ASC", tableName);
+        
+        try {
+            List<StoreItem> items = jdbcTemplate.query(sql, (rs, rowNum) -> {
+                String key = rs.getString("access_key");
+                String valJson = rs.getString("value");
+                Map<String, Object> valMap = deserializeValue(valJson);
+                return StoreItem.of(request.getNamespace(), key, valMap);
+            }, nsJson, keyPrefix + "%");
+
+            return StoreSearchResult.of(items, items.size(), 0, Math.max(1, items.size()));
+        } catch (Exception e) {
+            log.error("Error searching items by prefix", e);
+            return StoreSearchResult.of(Collections.emptyList(), 0, 0, 10);
+        }
+    }
+
+    /**
+     * 自定义辅助方法：获取指定用户的所有存储项 (通过前缀查询)
+     */
+    public List<StoreItem> listItemsByPrefix(List<String> namespace, String keyPrefix) {
+        StoreSearchRequest request = StoreSearchRequest.builder()
+            .namespace(namespace)
+            .filter(Map.of("key_prefix", keyPrefix))
+            .build();
+        StoreSearchResult result = searchItems(request);
+        return result != null ? result.getItems() : Collections.emptyList();
+    }
+
+    /**
+     * 按时间区间查询存储项
+     * @param namespace 命名空间
+     * @param keyPrefix 用户 ID 等 Key 前缀 (可选)
+     * @param startTime 开始时间
+     * @param endTime 结束时间
+     */
+    public List<StoreItem> listItemsByTimeRange(List<String> namespace, String keyPrefix, Date startTime, Date endTime) {
+        String nsJson = serializeNamespace(namespace);
+        String sql = String.format("""
+            SELECT * FROM %s 
+            WHERE namespace = ? 
+            AND access_key LIKE ? 
+            AND created_at BETWEEN ? AND ?
+            ORDER BY id ASC
+        """, tableName);
+
+        try {
+            return jdbcTemplate.query(sql, (rs, rowNum) -> {
+                String key = rs.getString("access_key");
+                String valJson = rs.getString("value");
+                Map<String, Object> valMap = deserializeValue(valJson);
+                return StoreItem.of(namespace, key, valMap);
+            }, nsJson, keyPrefix + "%", startTime, endTime);
+        } catch (Exception e) {
+            log.error("Error searching items by time range", e);
+            return Collections.emptyList();
+        }
     }
 }
