@@ -1,14 +1,13 @@
 package com.tengjiao.douya.app;
 
-import com.alibaba.cloud.ai.graph.CompileConfig;
+import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.OverAllState;
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
-import com.alibaba.cloud.ai.graph.agent.flow.agent.SupervisorAgent;
-import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
+import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.store.Store;
 import com.alibaba.cloud.ai.graph.store.stores.MemoryStore;
 import com.google.common.io.Files;
+import com.tengjiao.douya.graph.EatingMasterGraph;
 import com.tengjiao.douya.hook.CombinedMemoryHook;
 import com.tengjiao.douya.hook.PreferenceLearningHook;
 import com.tengjiao.douya.hook.RAGMessagesHook;
@@ -148,7 +147,7 @@ public class EatingMasterApp {
     private final ChatModel readUnderstandModel;
 
     private final Store memoryStore = new MemoryStore();
-    private final MemorySaver memorySaver = new MemorySaver();
+
     private final ToolCallbackProvider toolCallbackProvider;
 
     public EatingMasterApp(ChatModel eatingMasterModel, ChatModel summaryChatModel, Store douyaDatabaseStore, UserVectorApp userVectorApp, ChatModel readUnderstandModel,
@@ -197,29 +196,35 @@ public class EatingMasterApp {
 
         // 3. 构建核心监督者 (Supervisor)
         // 监督者模型可以使用 summaryChatModel (支持更好的逻辑推理)
-        CompileConfig compileConfig = CompileConfig.builder().recursionLimit(5).build();
-        SupervisorAgent supervisorAgent = SupervisorAgent.builder()
-            .name("supervisorAgent")
-            .description("美食咨询全局调度中心")
-            .model(summaryChatModel)
-            .systemPrompt(supervisorSystemPrompt)
-            .instruction(supervisorInstruction)
-            .subAgents(List.of(eatingMasterAgent, visionAgent))
-            .compileConfig(compileConfig)
-            .saver(memorySaver)
-            .build();
-
         // 构建运行配置
         RunnableConfig config = RunnableConfig.builder()
             .threadId("douya_flow_" + userId)
             .addMetadata("user_id", userId)
             .store(memoryStore)
-
             .build();
+
+        // 3. 构建核心监督者 Graph (Custom Implementation)
+        EatingMasterGraph eatingMasterGraph = new EatingMasterGraph(
+            summaryChatModel,
+            eatingMasterAgent,
+            visionAgent,
+            supervisorSystemPrompt,
+            supervisorInstruction,
+            config
+        );
 
         try {
             log.info("[Multi-Agent] 开始处理请求, 用户: {}, 消息: {}", userId, userMessage.getText());
-            Optional<OverAllState> invoke = supervisorAgent.invoke(userMessage, config);
+            // 编译并运行
+            CompiledGraph graph = eatingMasterGraph.createGraph();
+            
+            // 初始化状态，包含路由计数和历史
+            Map<String, Object> initialState = new HashMap<>();
+            initialState.put("messages", List.of(userMessage));
+            initialState.put("routing_count", 0);
+            initialState.put("routing_history", List.of());
+            
+            Optional<OverAllState> invoke = graph.invoke(initialState, config);
 
             if (invoke.isPresent()) {
                 OverAllState state = invoke.get();

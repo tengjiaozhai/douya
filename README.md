@@ -338,3 +338,9 @@ douya
 
 - **解决 uvx 工具链安装问题**: 针对 `pip install uvx` 报错（防御性占位包）的问题，通过正确安装 `uv` 核心包来提供 `uvx` 命令支持。
 - **配置 Windows 适配的 MCP Server**: 修改 `mcp-servers.json`，将 `xiaohongshu-automation` 服务配置为使用 `cmd.exe /c` 调用 `uvx`，以确保在 Windows 环境下的兼容性。
+
+### 2026-01-07
+
+- **自定义 Graph 监督者模式 (Custom Graph Supervisor)**: 鉴于官方 `SupervisorAgent` 的不稳定性，移除了其依赖，转为使用 Spring AI Alibaba Graph 的底层 API 手动构建 **有向循环图 (StateGraph)**。
+- **自定义 SupervisorNode**: 实现了基于 LLM 的自定义路由节点，增强了对死循环检测和上下文理解的控制力。
+- **架构透明化**: 通过显式的图构建 (`EatingMasterGraph`)，提升了多智能体协作流程的可观测性和可维护性。
