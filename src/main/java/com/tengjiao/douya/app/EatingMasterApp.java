@@ -275,7 +275,7 @@ public class EatingMasterApp {
                 if (state.data().containsKey("EatingMaster")) {
                     Object output = state.data().get("EatingMaster");
                     if (output instanceof AssistantMessage am) {
-                        saveReplyToMemory(userId, am.getText());
+                        saveConversationPair(userId, userMessage.getText(), am.getText(), "EatingMaster");
                         return am.getText();
                     }
                 }
@@ -284,7 +284,7 @@ public class EatingMasterApp {
                 if (state.data().containsKey("DailyAssistant")) {
                     Object output = state.data().get("DailyAssistant");
                     if (output instanceof AssistantMessage am) {
-                        saveReplyToMemory(userId, am.getText());
+                        saveConversationPair(userId, userMessage.getText(), am.getText(), "DailyAssistant");
                         return am.getText();
                     }
                 }
@@ -293,7 +293,7 @@ public class EatingMasterApp {
                 if (state.data().containsKey("VisionUnderstand")) {
                     Object output = state.data().get("VisionUnderstand");
                     if (output instanceof AssistantMessage am) {
-                        saveReplyToMemory(userId, am.getText());
+                        saveConversationPair(userId, userMessage.getText(), am.getText(), "VisionUnderstand");
                         return am.getText();
                     }
                 }
@@ -309,21 +309,32 @@ public class EatingMasterApp {
         }
     }
 
-    private void saveReplyToMemory(String userId, String text) {
+    private void saveConversationPair(String userId, String userQuery, String aiReply, String agentName) {
         LocalDateTime now = LocalDateTime.now();
         String formattedKey = userId + "_" + now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
 
-        log.info("[Multi-Agent] 记录回复 [Key: {}]: {}", formattedKey, text);
+        log.info("[Multi-Agent] 记录问答对 [Key: {}] (Agent: {}): Q={} | A={}", formattedKey, agentName, userQuery, aiReply);
 
         Map<String, Object> data = new HashMap<>();
-        data.put("text", text);
-        data.put("timestamp", System.currentTimeMillis());
-        data.put("role", "assistant");
+        data.put("user_query", userQuery);
+        data.put("ai_reply", aiReply);
+        data.put("agent_name", agentName);
+        data.put("timestamp", formattedKey);
+        data.put("role", "assistant"); // 保持统一
 
         // 长期存储：使用易读的日期格式 Key
-        douyaDatabaseStore.putItem(of(List.of("eating_master", "history"), formattedKey, data));
+        // 注意：PostgresStore 现在有自增 ID，所以即便 Key 重复也不怕乱序，但为了语义清晰，我们维持这个设计
+        // 实际上，为了支持一天多条，PostgresStore 最好不要有 UNIQUE(key)，目前我们改为了 UNIQUE(namespace, access_key) + ID
+        // 这里沿用 formattedKey 即可，因为我们的 putItem 实现如果是同一个 Key 会进入 ON CONFLICT UPDATE
+        // **警告**：如果数据库还是 UNIQUE(namespace, access_key)，那么同一天的 Key 会覆盖！
+        // 解决方案：为了不仅存最后一条，我们需要一个更唯一的 Key。
+        // 改为：yyyy-MM-dd_HH-mm-ss_SSS 以确保不覆盖
+        String uniqueKey = userId + "_" + now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss_SSS"));
 
-        // 短期存储
+        douyaDatabaseStore.putItem(of(List.of("eating_master", "history"), uniqueKey, data));
+
+        // 短期存储: 存入最新的一条，方便前端轮询或其他用途 (保留旧 Key 结构以兼容)
+        data.put("text", aiReply); // 兼容前端可能使用的字段
         memoryStore.putItem(of(List.of("eating_master"), userId + "_reply", data));
     }
 
