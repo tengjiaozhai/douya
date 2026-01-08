@@ -31,6 +31,7 @@ public class EatingMasterGraph {
     private final ChatModel supervisorModel;
     private final ReactAgent eatingMasterAgent;
     private final ReactAgent visionAgent;
+    private final ReactAgent dailyAgent; // 新增
     private final String supervisorSystemPrompt;
     private final String supervisorInstruction;
     private final RunnableConfig config;
@@ -38,12 +39,14 @@ public class EatingMasterGraph {
     public EatingMasterGraph(ChatModel supervisorModel,
                              ReactAgent eatingMasterAgent,
                              ReactAgent visionAgent,
+                             ReactAgent dailyAgent, // 新参数
                              String supervisorSystemPrompt,
                              String supervisorInstruction,
                              RunnableConfig config) {
         this.supervisorModel = supervisorModel;
         this.eatingMasterAgent = eatingMasterAgent;
         this.visionAgent = visionAgent;
+        this.dailyAgent = dailyAgent;
         this.supervisorSystemPrompt = supervisorSystemPrompt;
         this.supervisorInstruction = supervisorInstruction;
         this.config = config;
@@ -57,6 +60,7 @@ public class EatingMasterGraph {
             strategies.put("next", new ReplaceStrategy());    // 路由状态覆盖
             strategies.put("EatingMaster", new ReplaceStrategy());
             strategies.put("VisionUnderstand", new ReplaceStrategy());
+            strategies.put("DailyAssistant", new ReplaceStrategy()); // 新增
             strategies.put("routing_count", new ReplaceStrategy()); // 路由次数计数
             strategies.put("routing_history", new AppendStrategy()); // 路由历史追踪
             return strategies;
@@ -66,7 +70,7 @@ public class EatingMasterGraph {
         // 2.1 Supervisor Node
         SupervisorNode supervisorNode = new SupervisorNode(
             supervisorModel,
-            List.of("EatingMaster", "VisionUnderstand"),
+            List.of("EatingMaster", "VisionUnderstand", "DailyAssistant"), // 增加新成员
             supervisorSystemPrompt,
             supervisorInstruction
         );
@@ -74,12 +78,14 @@ public class EatingMasterGraph {
         // 2.2 Worker Nodes (Wrapped)
         NodeAction eatingMasterNode = state -> runAgent(eatingMasterAgent, state, "EatingMaster");
         NodeAction visionNode = state -> runAgent(visionAgent, state, "VisionUnderstand");
+        NodeAction dailyNode = state -> runAgent(dailyAgent, state, "DailyAssistant"); // 新增
 
         // 3. 构建 StateGraph
         StateGraph graph = new StateGraph(keyStrategyFactory)
             .addNode("supervisor", node_async(supervisorNode))
             .addNode("EatingMaster", node_async(eatingMasterNode))
             .addNode("VisionUnderstand", node_async(visionNode))
+            .addNode("DailyAssistant", node_async(dailyNode)) // 新增
             .addEdge(START, "supervisor")
             // 监督者路由逻辑：决定去哪个 Worker
             .addConditionalEdges(
@@ -88,6 +94,7 @@ public class EatingMasterGraph {
                 Map.of(
                     "EatingMaster", "EatingMaster",
                     "VisionUnderstand", "VisionUnderstand",
+                    "DailyAssistant", "DailyAssistant", // 新增映射
                     "FINISH", END
                 )
             )
@@ -102,6 +109,14 @@ public class EatingMasterGraph {
             )
             .addConditionalEdges(
                 "VisionUnderstand",
+                edge_async(state -> {
+                    String next = (String) state.value("next").orElse("FINISH");
+                    return "FINISH".equalsIgnoreCase(next) ? "FINISH" : "supervisor";
+                }),
+                Map.of("FINISH", END, "supervisor", "supervisor")
+            )
+            .addConditionalEdges( // 新增 DailyAssistant 的回流逻辑
+                "DailyAssistant",
                 edge_async(state -> {
                     String next = (String) state.value("next").orElse("FINISH");
                     return "FINISH".equalsIgnoreCase(next) ? "FINISH" : "supervisor";

@@ -49,8 +49,11 @@ public class EatingMasterApp {
             虽然你主要负责文本对话，但你的团队拥有顶尖的视觉分析专家。**永远不要说“我看不见”或“我无法理解图片”**。
             当用户提到图片、发了图片或询问视觉相关问题时，你应该自信地表现出你是具备视觉感知能力的（因为你的队友会把分析结果传给你）。
 
+            **关于联网搜索能力**：
+            你已接入实时互联网。面对具有时效性的咨询（如最新的餐厅排名、当季食材价格等），请积极利用搜索能力提供最前沿的信息。**绝对不要说“我无法访问实时互联网”**。
+
             **关于团队角色**：
-            你是整个 "Douya" 智能体团队的主理人和接待员。当用户问“你是谁”、“你能做什么”时，请大方地介绍你自己和你的视觉专家队友。
+            你是整个 "Douya" 智能体团队的主理人和接待员。当用户问“你是谁”、“你能做什么”时，请大方地介绍你自己和你的视觉专家队友，并强调你具备实时资讯获取能力。
 
             你的语言风格优雅、温和且富有感染力。在交流中，你不仅是知识的传播者，更是用户情绪的抚慰者。
             你擅长站在用户的角度思考，能够敏锐地察觉用户在字里行间流露出的情感需求。
@@ -92,6 +95,23 @@ public class EatingMasterApp {
            - [一句话摘要]: 对素材最核心价值的极简总结。
         """;
 
+    protected String dailyAssistantSystemPrompt = """
+        你是一个高效、乐于助人、足智多谋的生活助手（Daily Assistant）。
+        你的主要职责是处理用户在美食领域之外的通用查询，通过联网搜索工具获取实时的天气、财经、新闻、常识等信息。
+
+        **你的特性**：
+        - **即时响应**：面对需要网络信息的查询（如金价、汇率），直接调用搜索工具，不要犹豫。
+        - **简洁干练**：你的回答应直截了当，用数据和事实说话，无需像美食家那样进行过多的情感铺垫。
+        - **全能助手**：你可以回答任何非食品专业的问题。
+        """;
+
+    protected String dailyAssistantInstruction = """
+        请遵循以下响应原则：
+        1. **搜索优先**：如果用户问的是事实性问题（如“今天金价”、“天气”），必须使用搜索工具验证最新数据。
+        2. **格式化输出**：如果涉及数据（如价格、温度），请以清晰的格式（如列表、加粗）展示。
+        3. **边界**：如果用户问了非常深度的美食专业问题，请简要回答后建议用户咨询“美食专家队友”。
+        """;
+
     protected String supervisorSystemPrompt = """
         你是一个智能的美食咨询监督者，负责协调不同领域的专家来为用户提供服务。
 
@@ -102,11 +122,15 @@ public class EatingMasterApp {
         - **输出**: VisionUnderstand_result
 
         ### EatingMaster
-        - **功能**: 擅长美食文化、详细菜谱生成、饮食建议以及与用户的情感交流。
+        - **功能**: 擅长美食文化、详细菜谱生成、饮食建议以及与用户的情感交流。拥有实时联网搜索能力，可获取最新美食资讯和餐厅动态。
         - **输出**: EatingMaster_result
 
+        ### DailyAssistant
+        - **功能**: 擅长处理非美食领域的通用查询，如天气预报、财经数据（金价、汇率）、时事新闻、百科常识等。拥有全网实时搜索能力。
+        - **输出**: DailyAssistant_result
+
         ## 响应格式
-        只返回Agent名称（VisionUnderstand、EatingMaster）或 FINISH，不要包含其他解释。
+        只返回Agent名称（VisionUnderstand、EatingMaster、DailyAssistant）或 FINISH，不要包含其他解释。
         """;
 
     protected String supervisorInstruction = """
@@ -114,7 +138,7 @@ public class EatingMasterApp {
 
         1. **防死循环机制 (绝对优先)**:
            - **检查上一条消息**:
-             - 如果是 `EatingMaster` 的发言 -> **立刻 FINISH**。
+             - 如果是 `EatingMaster` 或 `DailyAssistant` 的发言 -> **立刻 FINISH**。
              - 如果是 `VisionUnderstand` 的发言 -> **禁止**再次调用 `VisionUnderstand`。
                - 无论它返回什么（包括“无素材”），都**禁止**重复询问它。
                - 如果你想安慰用户，路由给 `EatingMaster`；否则直接 `FINISH`。
@@ -131,15 +155,23 @@ public class EatingMasterApp {
            - 接待与介绍（“你是谁”）。
            - 纯文本的美食咨询、菜谱询问、闲聊。
 
-        4. **任务终结 (FINISH)**:
+        4. **通用助手介入 (DailyAssistant)**:
+           - 用户询问**非美食**领域的通用问题，例如：
+             - **财经/数据**：金价、股票、汇率。
+             - **生活服务**：天气、交通。
+             - **时事新闻**：今天发生了什么大新闻。
+             - **百科常识**：历史人物、科学原理。
+
+        5. **任务终结 (FINISH)**:
            - 默认操作。如果不符合上述路由条件，或任务已完成，返回 FINISH。
 
-        当前上下文输入：
+        current input:
         {input}
         """;
 
     // --- 智能体描述（用于路由选择） ---
-    private static final String EATING_MASTER_DESCRIPTION = "负责美食专业知识、菜谱建议、饮食文化科普、推荐建议以及与用户的情感交流。适用于所有文本对话和美食咨询场景。";
+    private static final String EATING_MASTER_DESCRIPTION = "负责美食专业知识、菜谱建议、饮食文化科普、推荐建议以及与用户的情感交流。具备实时联网搜索能力，可获取最新美食资讯和餐厅动态。适用于所有文本对话和美食咨询场景。";
+    private static final String DAILY_ASSISTANT_DESCRIPTION = "负责处理美食领域之外的通用查询，如天气、财经、新闻、常识百科等。具备全网实时搜索能力。";
     private static final String VISION_UNDERSTAND_DESCRIPTION = "负责对用户上传的图片、视频等视觉素材进行深度解析和信息提取。注意：仅当检测到明确的视觉素材附件时才调用此专家。单纯询问'你会看图吗'不要调用此人。";
 
     private final ChatModel eatingMasterModel;
@@ -181,7 +213,6 @@ public class EatingMasterApp {
             .hooks(preferenceLearningHook, combinedMemoryHook, ragMessagesHook)
             .interceptors(userPreferInterceptor)
             .outputKey("EatingMaster")
-            .tools(toolCallbackProvider.getToolCallbacks())
             .build();
 
         ReactAgent visionAgent = ReactAgent.builder()
@@ -190,10 +221,19 @@ public class EatingMasterApp {
             .model(readUnderstandModel)
             .systemPrompt(visionSystemPrompt)
             .instruction(visionInstruction)
-            .hooks(preferenceLearningHook, combinedMemoryHook, ragMessagesHook)
+            .hooks(preferenceLearningHook, combinedMemoryHook)
             .interceptors(userPreferInterceptor)
             .outputKey("VisionUnderstand")
-            .tools(toolCallbackProvider.getToolCallbacks())
+            .build();
+
+        ReactAgent dailyAgent = ReactAgent.builder()
+            .name("DailyAssistant")
+            .description(DAILY_ASSISTANT_DESCRIPTION)
+            .model(eatingMasterModel) // 利用其搜索能力
+            .systemPrompt(dailyAssistantSystemPrompt)
+            .instruction(dailyAssistantInstruction)
+            .hooks(preferenceLearningHook, combinedMemoryHook) // 通用助手不需要 RAG 菜谱
+            .outputKey("DailyAssistant")
             .build();
 
         // 3. 构建核心监督者 (Supervisor)
@@ -210,6 +250,7 @@ public class EatingMasterApp {
             summaryChatModel,
             eatingMasterAgent,
             visionAgent,
+            dailyAgent, // 新增
             supervisorSystemPrompt,
             supervisorInstruction,
             config
@@ -233,6 +274,15 @@ public class EatingMasterApp {
                 // 1. 优先尝试获取 EatingMaster 的输出 (通常是最终回复)
                 if (state.data().containsKey("EatingMaster")) {
                     Object output = state.data().get("EatingMaster");
+                    if (output instanceof AssistantMessage am) {
+                        saveReplyToMemory(userId, am.getText());
+                        return am.getText();
+                    }
+                }
+
+                // 1.5 尝试获取 DailyAssistant 的输出 (通用查询)
+                if (state.data().containsKey("DailyAssistant")) {
+                    Object output = state.data().get("DailyAssistant");
                     if (output instanceof AssistantMessage am) {
                         saveReplyToMemory(userId, am.getText());
                         return am.getText();
