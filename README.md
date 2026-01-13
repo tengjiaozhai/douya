@@ -65,18 +65,24 @@ mvn spring-boot:run
 - **API 文档 (Knife4j)**: [http://localhost:8787/api/doc.html](http://localhost:8787/api/doc.html)
 - **健康检查**: [http://localhost:8787/api/douya/hello](http://localhost:8787/api/douya/hello)
 
-## 记忆存储 (Memory Configuration)
+### 记忆存储架构 (Hierarchical Memory Architecture)
 
-本项目主要使用 `Spring AI Alibaba Graph` 提供的 `Store` 接口来管理 Agent 的状态（State）和记忆（Memory）。目前支持以下四种存储介质，其优劣对比及选择建议如下：
+项目采用基于 **分级存储策略** 的智能体记忆管理方案，在保证响应延迟（Latency）的同时，实现了海量上下文的持久化与语义检索。
 
-| 存储方案          | 类型    | 优点                                                  | 缺点                                                | 适用场景                              | 推荐指数          |
-| :---------------- | :------ | :---------------------------------------------------- | :-------------------------------------------------- | :------------------------------------ | :---------------- |
-| **MemoryStore**   | 内存    | 🚀 **极速**、零配置、无依赖                           | ❌ **易失性** (重启即丢)、占用 JVM 内存、不支持集群 | **开发/测试/演示** (当前默认)         | ⭐⭐⭐ (Dev)      |
-| **RedisStore**    | KV 缓存 | ⚡ **高性能**、支持持久化、支持集群共享、TTL 机制完善 | ⚠️ 需部署 Redis 服务                                | **生产环境首选** (Session/State 管理) | ⭐⭐⭐⭐⭐ (Prod) |
-| **DatabaseStore** | SQL     | 🛡️ **结构化**、数据强一致、易于审计/分析              | 📉 读写性能略低、Schema 变更略繁琐                  | 需与业务数据强关联、长期归档          | ⭐⭐⭐            |
-| **MongoStore**    | 文档    | 📝 **灵活** (Schema-less)、适合存复杂对象             | ⚠️ 需部署 Mongo、运维成本增加                       | 存储大规模非结构化历史数据            | ⭐⭐⭐            |
+| 存储方案          | 定位     | 核心技术                             | 优势                                                  |
+| :---------------- | :------- | :----------------------------------- | :---------------------------------------------------- |
+| **L1: 热记忆**    | 实时会话 | `MemoryStore` (JVM Cache)            | 🚀 **零延迟**，承载当前活跃的上下文窗口（Sliding Window） |
+| **L2: 冷记忆**    | 历史归档 | `PostgresStore` (Persistent SQL)     | 🛡️ **高可靠**，结构化存储全量历史，支持跨会话上下文恢复   |
+| **L3: 知识记忆**  | 专家知识 | `ChromaVectorStore` (Vector DB)      | 🧠 **Agentic RAG**，按需主动检索，支持混合搜索（本地 + 联网） |
 
-### 环境与依赖要求
+#### 1. L1 内存缓存 (MemoryStore)
+- **作用**: 存储当前 `threadId` 下的活跃消息列表。
+- **性能**: JVM 内存读写，确保多智能体（Supervisor）频繁流转时的极致性能。
+
+#### 2. L2 自定义持久化存储 (PostgresStore)
+- **挑战**: Spring AI 默认的 `DatabaseStore` 使用 MySQL 语法，在 PostgreSQL 下会触发语法错误。
+- **解决**: 手动实现 `PostgresStore`，采用 `INSERT ... ON CONFLICT` 适配 PG 方言，并引入 `BIGSERIAL` 主键提升海量数据下的索引性能。
+- **冷启动恢复**: 系统具备 **Context Rehydration (上下文脱水重张)** 能力。当用户新开会话或服务重启后，系统能自动从 L2 存储中拉取最近的 N 条记录重新填入手状态。
 
 使用非 `MemoryStore` 方案时，需要准备相应的外部服务并添加 Maven 依赖：
 
@@ -241,17 +247,15 @@ douya
     - **查询偏好**: `GET /api/douya/preferences?userId=user_001`
       - 返回该用户所有已记录的偏好列表。
 
-### 混合记忆管理 (Hybrid Memory Management)
+### Agentic RAG 与混合检索 (Agentic & Hybrid Search)
 
-支持短期记忆与长期记忆的智能流转与知识转化：
+项目实现了从被动 RAG 到 **Agentic RAG** 的升级，通过 `MemorySearchTool` 让智能体具备了主动思考和检索的能力：
 
-1.  **短期上下文管理**: 自动维护最近 **10 条** 消息的活跃上下文，平衡响应精度与上下文成本。
-2.  **持久化归档**: 超出阈值的历史消息自动存入持久化存储（`DatabaseStore`），支持全量历史追溯。
-3.  **异步总结批处理 (Token 优化)**:
-    - **分批触发**: 仅在历史记录每积攒满 **10 条** 时才触发一次总结，显著降低大模型调用频率及 Token 消耗。
-    - **语义总结**: 自动将散乱的对话压缩为精简摘要，保留核心地理、意图及决策信息。
-    - **向量化知识库**: 使用 `UserVectorApp` 将摘要存入 Chroma，构建用户专属的 RAG 知识源。
-    - **无感执行**: 基于 Java 21 虚拟线程异步完成，零延迟感。
+1.  **主动检索 (On-demand Retrieval)**: 智能体不再机械地在每条消息前注入上下文，而是根据 `instruction` 指令，仅在涉及“历史、之前、偏好”等关键词时主动调用 `memory_search` 工具。
+2.  **混合检索策略 (Hybrid Search Flow)**:
+    - **DailyAssistant** 现在可以同时访问本地记忆库和实时互联网。
+    - **降级机制**: 当本地检索无果（例如用户问了一个记忆中没有的新领域喜好）时，智能体会接收到工具反馈的“未找到结果”，并自动触发联网搜索补位。
+3.  **Token 优化**: 由于不再盲目注入背景信息，显著降低了日常闲聊场景下的 Prompt Token 消耗。
 
 ## 多智能体协作 (Multi-Agent Collaboration)
 
@@ -320,6 +324,13 @@ douya
 - **GitHub**: [https://github.com/tengjiao](https://github.com/tengjiao)
 
 ## 更新日志
+
+### 2026-01-13
+
+- **Agentic RAG 模式升级**: 将 RAG 逻辑从被动注入的 Hook 模式重构为智能体自主调用的 Tool 模式 (`MemorySearchTool`)。
+- **混合检索集成**: 为 `DailyAssistant` 注入 RAG 能力，实现了“本地记忆 + 联网搜索”的混合检索逻辑。
+- **优化 RAG 空结果处理**: 增强了工具在检索无果时的反馈机制，引导 Agent 自动转向联网搜索，解决了无内容时的响应幻觉。
+- **修复 MCP 401 认证问题**: 引入 `McpConfig` 通过 `WebClientCustomizer` 全局注入 `Authorization` Header，解决了 Streamable HTTP 传输协议下的鉴权失败问题。
 
 ### 2025-12-30
 

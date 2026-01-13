@@ -10,24 +10,28 @@ import com.google.common.io.Files;
 import com.tengjiao.douya.graph.EatingMasterGraph;
 import com.tengjiao.douya.hook.CombinedMemoryHook;
 import com.tengjiao.douya.hook.PreferenceLearningHook;
-import com.tengjiao.douya.hook.RAGMessagesHook;
+import com.tengjiao.douya.infra.tool.MemorySearchTool;
 import com.tengjiao.douya.interceptors.UserPreferInterceptors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.content.Media;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
+import com.tengjiao.douya.infra.store.PostgresStore;
+import com.alibaba.cloud.ai.graph.store.StoreItem;
 
 import java.io.File;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static com.alibaba.cloud.ai.graph.store.StoreItem.*;
 
@@ -60,119 +64,122 @@ public class EatingMasterApp {
             """;
 
     protected String eatingMasterInstruction = """
-            在回答问题时,请遵循以下步骤:
-            1. **共情与肯定**：首先对用户的处境或想法表达理解与肯定。
-            2. **需求挖掘**：帮助用户识别出他们内心深处真正的美食诉求。
-            3. **专业拆解**：以专家的深度提供技术方案，并分享美食背后的生活美学。
-            4. **引导式互动**：如果信息不足，请以关怀的口吻提出启发式的问题。
-            5. **联网搜索**：积极触发搜索工具，务必不要回答“我无法联网”。
-            6. **视觉能力回应**：当用户问“你会看图吗”、“能不能分析照片”时：
-               - 请自信回答：“当然可以！我的团队拥有顶尖的视觉分析专家。”
-               - 引导用户：“请直接发送您的图片，或告诉我您想让我看什么。”
-               - **注意**：此时不要试图自己去分析（你也看不到），也不要触发任何工具，只需热情引导。
+                在回答问题时,请遵循以下步骤:
+                1. **共情与肯定**：首先对用户的处境或想法表达理解与肯定。
+                2. **需求挖掘**：帮助用户识别出他们内心深处真正的美食诉求。
+                3. **背景检索 (RAG)**：如果用户提到“上次”、“之前”或类似回归历史的词汇，请**优先调用 `memory_search` 工具**获取对话背景或历史偏好。
+                4. **专业拆解**：以专家的深度提供技术方案，并分享美食背后的生活美学。
+                5. **引导式互动**：如果信息不足，请以关怀的口吻提出启发式的问题。
+                6. **联网搜索**：积极触发搜索工具，务必不要回答“我无法联网”。
+                7. **视觉能力回应**：当用户问“你会看图吗”、“能不能分析照片”时：
+                   - 请自信回答：“当然可以！我的团队拥有顶尖的视觉分析专家。”
+                   - 引导用户：“请直接发送您的图片，或告诉我您想让我看什么。”
+                   - **注意**：此时不要试图自己去分析（你也看不到），也不要触发任何工具，只需热情引导。
 
-        输出规范
-        语言要求：所有回复、思考过程及任务清单，均须使用中文。
-        语气要求：专业而谦逊，自信且充满暖意。
-        """;
+            输出规范
+            语言要求：所有回复、思考过程及任务清单，均须使用中文。
+            语气要求：专业而谦逊，自信且充满暖意。
+            """;
 
     protected String visionSystemPrompt = """
-        你是一个精通多模态识别的资深视觉分析专家。你拥有极强的观察力与客观描述能力。
-        你的任务是将复杂的视觉信号转化为详尽、客观且结构化的文本描述。
-        """;
+            你是一个精通多模态识别的资深视觉分析专家。你拥有极强的观察力与客观描述能力。
+            你的任务是将复杂的视觉信号转化为详尽、客观且结构化的文本描述。
+            """;
 
     protected String visionInstruction = """
-        请以【最高信息密度】分析素材，严格遵守以下规范：
-        1. **特殊情况**：
-           - 如果用户询问能力（如“你会看图吗”），请回答：“**我具备视觉分析能力。请发送图片或视频，我将为您深入解析食材与环境。**”
-           - 如果未提供素材且非能力询问，请回答：“**请先上传视觉素材（图片/视频），以便我为您进行多模态分析。**”
-        2. **严禁开场白**：直接输出数据。
-        3. **纯粹事实**：确保文字精炼，禁用第一人称。
-        4. **结构化格式**（仅在有素材时使用）：
-           - [核心主体]: 名称/类别/主要焦点。
-           - [关键细节]: 提取文字字段、品牌、颜色、核心特征。
-           - [环境背景]: 场景、当前状态。
-           - [一句话摘要]: 对素材最核心价值的极简总结。
-        """;
+            请以【最高信息密度】分析素材，严格遵守以下规范：
+            1. **特殊情况**：
+               - 如果用户询问能力（如“你会看图吗”），请回答：“**我具备视觉分析能力。请发送图片或视频，我将为您深入解析食材与环境。**”
+               - 如果未提供素材且非能力询问，请回答：“**请先上传视觉素材（图片/视频），以便我为您进行多模态分析。**”
+            2. **严禁开场白**：直接输出数据。
+            3. **纯粹事实**：确保文字精炼，禁用第一人称。
+            4. **结构化格式**（仅在有素材时使用）：
+               - [核心主体]: 名称/类别/主要焦点。
+               - [关键细节]: 提取文字字段、品牌、颜色、核心特征。
+               - [环境背景]: 场景、当前状态。
+               - [一句话摘要]: 对素材最核心价值的极简总结。
+            """;
 
     protected String dailyAssistantSystemPrompt = """
-        你是一个高效、乐于助人、足智多谋的生活助手（Daily Assistant）。
-        你的主要职责是处理用户在美食领域之外的通用查询，通过联网搜索工具获取实时的天气、财经、新闻、常识等信息。
+            你是一个高效、乐于助人、足智多谋的生活助手（Daily Assistant）。
+            你的主要职责是处理用户在美食领域之外的通用查询，通过联网搜索工具获取实时的天气、财经、新闻、常识等信息。
 
-        **你的特性**：
-        - **即时响应**：面对需要网络信息的查询（如金价、汇率），直接调用搜索工具，不要犹豫。
-        - **简洁干练**：你的回答应直截了当，用数据和事实说话，无需像美食家那样进行过多的情感铺垫。
-        - **全能助手**：你可以回答任何非食品专业的问题。
-        """;
+            **你的特性**：
+            - **即时响应**：面对需要网络信息的查询（如金价、汇率），直接调用搜索工具，不要犹豫。
+            - **简洁干练**：你的回答应直截了当，用数据和事实说话，无需像美食家那样进行过多的情感铺垫。
+            - **全能助手**：你可以回答任何非食品专业的问题。
+            """;
 
     protected String dailyAssistantInstruction = """
-        请遵循以下响应原则：
-        1. **搜索优先**：如果用户问的是事实性问题（如“今天金价”、“天气”），必须使用搜索工具验证最新数据。
-        2. **格式化输出**：如果涉及数据（如价格、温度），请以清晰的格式（如列表、加粗）展示。
-        3. **边界**：如果用户问了非常深度的美食专业问题，请简要回答后建议用户咨询“美食专家队友”。
-        """;
+            请遵循以下响应原则：
+            1. **混合检索 (Hybrid Search)**：
+               - **本地优先**：如果问题涉及用户的偏好、过往对话或身份信息，请先调用 `memory_search` 工具。
+               - **联网补位**：如果是事实性问题（如“今天金价”、“天气”），或者本地记忆中未找到满意答案，必须使用搜索工具验证最新数据。
+            2. **格式化输出**：如果涉及数据（如价格、温度），请以清晰的格式（如列表、加粗）展示。
+            3. **边界**：如果用户问了非常深度的美食专业问题，请简要回答后建议用户咨询“美食专家队友”。
+            """;
 
     protected String supervisorSystemPrompt = """
-        你是一个智能的美食咨询监督者，负责协调不同领域的专家来为用户提供服务。
+            你是一个智能的美食咨询监督者，负责协调不同领域的专家来为用户提供服务。
 
-        ## 可用的子Agent及其职责
+            ## 可用的子Agent及其职责
 
-        ### VisionUnderstand
-        - **功能**: 擅长对用户上传的图片、视频进行深度解析，提取食材、菜品、环境等视觉信息。
-        - **输出**: VisionUnderstand_result
+            ### VisionUnderstand
+            - **功能**: 擅长对用户上传的图片、视频进行深度解析，提取食材、菜品、环境等视觉信息。
+            - **输出**: VisionUnderstand_result
 
-        ### EatingMaster
-        - **功能**: 擅长美食文化、详细菜谱生成、饮食建议以及与用户的情感交流。拥有实时联网搜索能力，可获取最新美食资讯和餐厅动态。
-        - **输出**: EatingMaster_result
+            ### EatingMaster
+            - **功能**: 擅长美食文化、详细菜谱生成、饮食建议以及与用户的情感交流。拥有实时联网搜索能力和本地记忆检索 (RAG) 能力。
+            - **输出**: EatingMaster_result
 
-        ### DailyAssistant
-        - **功能**: 擅长处理非美食领域的通用查询，如天气预报、财经数据（金价、汇率）、时事新闻、百科常识等。拥有全网实时搜索能力。
-        - **输出**: DailyAssistant_result
+            ### DailyAssistant
+            - **功能**: 擅长处理非美食领域的通用查询，如天气预报、财经数据等。拥有全网实时搜索能力，并能通过本地记忆检索了解用户的个人背景。
+            - **输出**: DailyAssistant_result
 
-        ## 响应格式
-        只返回Agent名称（VisionUnderstand、EatingMaster、DailyAssistant）或 FINISH，不要包含其他解释。
-        """;
+            ## 响应格式
+            只返回Agent名称（VisionUnderstand、EatingMaster、DailyAssistant）或 FINISH，不要包含其他解释。
+            """;
 
     protected String supervisorInstruction = """
-        请仔细分析当前的任务状态和用户需求，以及 **前序步骤的执行结果**（非常重要），决定下一步操作：
+            请仔细分析当前的任务状态和用户需求，以及 **前序步骤的执行结果**（非常重要），决定下一步操作：
 
-        1. **防死循环机制 (绝对优先)**:
-           - **检查上一条消息**:
-             - 如果是 `EatingMaster` 或 `DailyAssistant` 的发言 -> **立刻 FINISH**。
-             - 如果是 `VisionUnderstand` 的发言 -> **禁止**再次调用 `VisionUnderstand`。
-               - 无论它返回什么（包括“无素材”），都**禁止**重复询问它。
-               - 如果你想安慰用户，路由给 `EatingMaster`；否则直接 `FINISH`。
-           - **全局禁止**: 严禁在同一次处理中连续重复调用同一个子 Agent。
+            1. **防死循环机制 (绝对优先)**:
+               - **检查上一条消息**:
+                 - 如果是 `EatingMaster` 或 `DailyAssistant` 的发言 -> **立刻 FINISH**。
+                 - 如果是 `VisionUnderstand` 的发言 -> **禁止**再次调用 `VisionUnderstand`。
+                   - 无论它返回什么（包括“无素材”），都**禁止**重复询问它。
+                   - 如果你想安慰用户，路由给 `EatingMaster`；否则直接 `FINISH`。
+               - **全局禁止**: 严禁在同一次处理中连续重复调用同一个子 Agent。
 
-        2. **视觉相关请求 (VisionUnderstand)**:
-           - **必须满足**：用户发送了图片/视频文件，或者上下文中包含需要分析的且未过期的视觉素材。
-           - **明确指向**：用户明确要求“分析这张图”、“看左边的角落” (且图已存在)。
-           - **注意**：如果用户只是问“你会看图吗”、“能不能识别图片”等**能力询问**，请路由给 **EatingMaster**，不要路由给 VisionUnderstand。
+            2. **视觉相关请求 (VisionUnderstand)**:
+               - **必须满足**：用户发送了图片/视频文件，或者上下文中包含需要分析的且未过期的视觉素材。
+               - **明确指向**：用户明确要求“分析这张图”、“看左边的角落” (且图已存在)。
+               - **注意**：如果用户只是问“你会看图吗”、“能不能识别图片”等**能力询问**，请路由给 **EatingMaster**，不要路由给 VisionUnderstand。
 
-        3. **美食专家介入 (EatingMaster)**:
-           - 视觉信息已提取完成 (VisionUnderstand 已执行完毕)。
-           - **能力询问**：用户问“你会看图吗”、“你懂视频吗”。
-           - 接待与介绍（“你是谁”）。
-           - 纯文本的美食咨询、菜谱询问、闲聊。
+            3. **美食专家介入 (EatingMaster)**:
+               - 视觉信息已提取完成 (VisionUnderstand 已执行完毕)。
+               - **能力询问**：用户问“你会看图吗”、“你懂视频吗”。
+               - 接待与介绍（“你是谁”）。
+               - 纯文本的美食咨询、菜谱询问、闲聊。
 
-        4. **通用助手介入 (DailyAssistant)**:
-           - 用户询问**非美食**领域的通用问题，例如：
-             - **财经/数据**：金价、股票、汇率。
-             - **生活服务**：天气、交通。
-             - **时事新闻**：今天发生了什么大新闻。
-             - **百科常识**：历史人物、科学原理。
+            4. **通用助手介入 (DailyAssistant)**:
+               - 用户询问**非美食**领域的通用问题，例如：
+                 - **财经/数据**：金价、股票、汇率。
+                 - **生活服务**：天气、交通。
+                 - **时事新闻**：今天发生了什么大新闻。
+                 - **百科常识**：历史人物、科学原理。
 
-        5. **任务终结 (FINISH)**:
-           - 默认操作。如果不符合上述路由条件，或任务已完成，返回 FINISH。
+            5. **任务终结 (FINISH)**:
+               - 默认操作。如果不符合上述路由条件，或任务已完成，返回 FINISH。
 
-        current input:
-        {input}
-        """;
+            current input:
+            {input}
+            """;
 
     // --- 智能体描述（用于路由选择） ---
-    private static final String EATING_MASTER_DESCRIPTION = "负责美食专业知识、菜谱建议、饮食文化科普、推荐建议以及与用户的情感交流。具备实时联网搜索能力，可获取最新美食资讯和餐厅动态。适用于所有文本对话和美食咨询场景。";
-    private static final String DAILY_ASSISTANT_DESCRIPTION = "负责处理美食领域之外的通用查询，如天气、财经、新闻、常识百科等。具备全网实时搜索能力。";
-    private static final String VISION_UNDERSTAND_DESCRIPTION = "负责对用户上传的图片、视频等视觉素材进行深度解析和信息提取。注意：仅当检测到明确的视觉素材附件时才调用此专家。单纯询问'你会看图吗'不要调用此人。";
+    private static final String EATING_MASTER_DESCRIPTION = "负责美食专业知识与情感交流。具备实时联网搜索与本地记忆检索能力。适用于美食咨询与“记得我之前说过什么”的场景。";
+    private static final String DAILY_ASSISTANT_DESCRIPTION = "负责通用领域（天气、财经、常识）查询。具备全网实时搜索与本地记忆检索能力，实现混合搜索。";
+    private static final String VISION_UNDERSTAND_DESCRIPTION = "负责深度解析视觉素材。注意：仅当检测到明确的视觉素材附件时才调用。";
 
     private final ChatModel eatingMasterModel;
     private final ChatModel summaryChatModel;
@@ -184,8 +191,9 @@ public class EatingMasterApp {
 
     private final ToolCallbackProvider toolCallbackProvider;
 
-    public EatingMasterApp(ChatModel eatingMasterModel, ChatModel summaryChatModel, Store douyaDatabaseStore, UserVectorApp userVectorApp, ChatModel readUnderstandModel,
-                           ToolCallbackProvider toolCallbackProvider) {
+    public EatingMasterApp(ChatModel eatingMasterModel, ChatModel summaryChatModel, Store douyaDatabaseStore,
+            UserVectorApp userVectorApp, ChatModel readUnderstandModel,
+            ToolCallbackProvider toolCallbackProvider) {
         this.eatingMasterModel = eatingMasterModel;
         this.summaryChatModel = summaryChatModel;
         this.douyaDatabaseStore = douyaDatabaseStore;
@@ -199,71 +207,89 @@ public class EatingMasterApp {
      */
     private String process(UserMessage userMessage, String userId) {
         // 1. 初始化子智能体
-        PreferenceLearningHook preferenceLearningHook = new PreferenceLearningHook(summaryChatModel, douyaDatabaseStore);
-        CombinedMemoryHook combinedMemoryHook = new CombinedMemoryHook(douyaDatabaseStore, summaryChatModel, userVectorApp, 10, 10);
-        RAGMessagesHook ragMessagesHook = new RAGMessagesHook(userVectorApp);
+        PreferenceLearningHook preferenceLearningHook = new PreferenceLearningHook(summaryChatModel,
+                douyaDatabaseStore);
+        CombinedMemoryHook combinedMemoryHook = new CombinedMemoryHook(douyaDatabaseStore, summaryChatModel,
+                userVectorApp, 10, 10);
+        // 移除 RAGMessagesHook，改为工具模式
+        // RAGMessagesHook ragMessagesHook = new RAGMessagesHook(userVectorApp);
+
+        // 创建本地记忆搜索工具
+        MemorySearchTool memorySearchTool = new MemorySearchTool(userVectorApp, userId);
+        ToolCallback ragToolCallback = FunctionToolCallback.builder("memory_search",
+                (Function<MemorySearchTool.Request, MemorySearchTool.Response>) memorySearchTool::search)
+                .description("搜索本地对话历史、用户偏好或已存背景知识。当你需要回忆之前的对话内容或了解用户特定喜好时使用。")
+                .inputType(MemorySearchTool.Request.class)
+                .build();
+
         // 创建用户偏好注入拦截器 (由 userId 驱动)
         UserPreferInterceptors userPreferInterceptor = new UserPreferInterceptors(douyaDatabaseStore, userId);
+
         ReactAgent eatingMasterAgent = ReactAgent.builder()
-            .name("EatingMaster")
-            .description(EATING_MASTER_DESCRIPTION)
-            .model(eatingMasterModel)
-            .systemPrompt(eatingMasterSystemPrompt)
-            .instruction(eatingMasterInstruction)
-            .hooks(preferenceLearningHook, combinedMemoryHook, ragMessagesHook)
-            .interceptors(userPreferInterceptor)
-            .outputKey("EatingMaster")
-            .build();
+                .name("EatingMaster")
+                .description(EATING_MASTER_DESCRIPTION)
+                .model(eatingMasterModel)
+                .systemPrompt(eatingMasterSystemPrompt)
+                .instruction(eatingMasterInstruction)
+                .hooks(preferenceLearningHook, combinedMemoryHook) // 移除 ragMessagesHook
+                .tools(ragToolCallback) // 注入 RAG 工具
+                .interceptors(userPreferInterceptor)
+                .outputKey("EatingMaster")
+                .build();
 
         ReactAgent visionAgent = ReactAgent.builder()
-            .name("VisionUnderstand")
-            .description(VISION_UNDERSTAND_DESCRIPTION)
-            .model(readUnderstandModel)
-            .systemPrompt(visionSystemPrompt)
-            .instruction(visionInstruction)
-            .hooks(preferenceLearningHook, combinedMemoryHook)
-            .interceptors(userPreferInterceptor)
-            .outputKey("VisionUnderstand")
-            .build();
+                .name("VisionUnderstand")
+                .description(VISION_UNDERSTAND_DESCRIPTION)
+                .model(readUnderstandModel)
+                .systemPrompt(visionSystemPrompt)
+                .instruction(visionInstruction)
+                .hooks(preferenceLearningHook, combinedMemoryHook)
+                .interceptors(userPreferInterceptor)
+                .outputKey("VisionUnderstand")
+                .build();
 
         ReactAgent dailyAgent = ReactAgent.builder()
-            .name("DailyAssistant")
-            .description(DAILY_ASSISTANT_DESCRIPTION)
-            .model(eatingMasterModel) // 利用其搜索能力
-            .systemPrompt(dailyAssistantSystemPrompt)
-            .instruction(dailyAssistantInstruction)
-            .hooks(preferenceLearningHook, combinedMemoryHook) // 通用助手不需要 RAG 菜谱
-            .outputKey("DailyAssistant")
-            .build();
+                .name("DailyAssistant")
+                .description(DAILY_ASSISTANT_DESCRIPTION)
+                .model(eatingMasterModel) // 利用其搜索能力
+                .systemPrompt(dailyAssistantSystemPrompt)
+                .instruction(dailyAssistantInstruction)
+                .hooks(preferenceLearningHook, combinedMemoryHook)
+                .tools(ragToolCallback) // 注入 RAG 工具，实现混合检索
+                .outputKey("DailyAssistant")
+                .build();
 
-        // 3. 构建核心监督者 (Supervisor)
-        // 监督者模型可以使用 summaryChatModel (支持更好的逻辑推理)
         // 构建运行配置
         RunnableConfig config = RunnableConfig.builder()
-            .threadId("douya_flow_" + userId)
-            .addMetadata("user_id", userId)
-            .store(memoryStore)
-            .build();
+                .threadId("douya_flow_" + userId)
+                .addMetadata("user_id", userId)
+                .store(memoryStore)
+                .build();
 
         // 3. 构建核心监督者 Graph (Custom Implementation)
         EatingMasterGraph eatingMasterGraph = new EatingMasterGraph(
-            summaryChatModel,
-            eatingMasterAgent,
-            visionAgent,
-            dailyAgent, // 新增
-            supervisorSystemPrompt,
-            supervisorInstruction,
-            config
-        );
+                summaryChatModel,
+                eatingMasterAgent,
+                visionAgent,
+                dailyAgent,
+                supervisorSystemPrompt,
+                supervisorInstruction,
+                config);
 
         try {
             log.info("[Multi-Agent] 开始处理请求, 用户: {}, 消息: {}", userId, userMessage.getText());
+
+            // 4. 尝试从持久化存储中恢复最近的上下文 (冷启动优化/自动切换)
+            List<Message> history = loadRecentHistoryFromDatabase(userId, 10);
+
             // 编译并运行
             CompiledGraph graph = eatingMasterGraph.createGraph();
 
-            // 初始化状态，包含路由计数和历史
+            // 初始化状态，合并历史与当前消息
             Map<String, Object> initialState = new HashMap<>();
-            initialState.put("messages", List.of(userMessage));
+            List<Message> messages = new ArrayList<>(history);
+            messages.add(userMessage);
+            initialState.put("messages", messages);
             initialState.put("routing_count", 0);
             initialState.put("routing_history", List.of());
 
@@ -271,7 +297,7 @@ public class EatingMasterApp {
 
             if (invoke.isPresent()) {
                 OverAllState state = invoke.get();
-                // 1. 优先尝试获取 EatingMaster 的输出 (通常是最终回复)
+                // 优先尝试获取各子 Agent 的最终输出
                 if (state.data().containsKey("EatingMaster")) {
                     Object output = state.data().get("EatingMaster");
                     if (output instanceof AssistantMessage am) {
@@ -279,8 +305,6 @@ public class EatingMasterApp {
                         return am.getText();
                     }
                 }
-
-                // 1.5 尝试获取 DailyAssistant 的输出 (通用查询)
                 if (state.data().containsKey("DailyAssistant")) {
                     Object output = state.data().get("DailyAssistant");
                     if (output instanceof AssistantMessage am) {
@@ -288,8 +312,6 @@ public class EatingMasterApp {
                         return am.getText();
                     }
                 }
-
-                // 2. 如果没有 EatingMaster，尝试获取 VisionUnderstand 的输出
                 if (state.data().containsKey("VisionUnderstand")) {
                     Object output = state.data().get("VisionUnderstand");
                     if (output instanceof AssistantMessage am) {
@@ -297,8 +319,6 @@ public class EatingMasterApp {
                         return am.getText();
                     }
                 }
-
-                // 3. Fallback: 如果都没有，返回整个 state 的 toString (调试用), 或一个友好提示
                 log.warn("[Multi-Agent] 未找到子Agent的标准输出，返回 State: {}", state.data());
                 return "抱歉，我的大脑暂时断片了";
             }
@@ -324,7 +344,8 @@ public class EatingMasterApp {
 
         // 长期存储：使用易读的日期格式 Key
         // 注意：PostgresStore 现在有自增 ID，所以即便 Key 重复也不怕乱序，但为了语义清晰，我们维持这个设计
-        // 实际上，为了支持一天多条，PostgresStore 最好不要有 UNIQUE(key)，目前我们改为了 UNIQUE(namespace, access_key) + ID
+        // 实际上，为了支持一天多条，PostgresStore 最好不要有 UNIQUE(key)，目前我们改为了 UNIQUE(namespace,
+        // access_key) + ID
         // 这里沿用 formattedKey 即可，因为我们的 putItem 实现如果是同一个 Key 会进入 ON CONFLICT UPDATE
         // **警告**：如果数据库还是 UNIQUE(namespace, access_key)，那么同一天的 Key 会覆盖！
         // 解决方案：为了不仅存最后一条，我们需要一个更唯一的 Key。
@@ -362,12 +383,12 @@ public class EatingMasterApp {
             }
 
             UserMessage userMessage = UserMessage.builder()
-                .text(userQuery)
-                .media(Media.builder()
-                    .mimeType(MimeTypeUtils.parseMimeType(mimeType))
-                    .data(Files.toByteArray(file))
-                    .build())
-                .build();
+                    .text(userQuery)
+                    .media(Media.builder()
+                            .mimeType(MimeTypeUtils.parseMimeType(mimeType))
+                            .data(Files.toByteArray(file))
+                            .build())
+                    .build();
 
             String process = process(userMessage, userId);
             file.delete();
@@ -400,13 +421,49 @@ public class EatingMasterApp {
 
     public String getPendingImage(String userId) {
         return douyaDatabaseStore.getItem(List.of("pending_activity"), userId + "_image_path")
-            .map(item -> (String) item.getValue().get("path"))
-            .orElse(null);
+                .map(item -> (String) item.getValue().get("path"))
+                .orElse(null);
     }
 
     public void clearPendingImage(String userId) {
         Map<String, Object> data = new HashMap<>();
         data.put("path", null);
         douyaDatabaseStore.putItem(of(List.of("pending_activity"), userId + "_image_path", data));
+    }
+
+    /**
+     * 从数据库加载最近的原始对话历史
+     * 对应 CombinedMemoryHook.archiveMessages 存储的格式
+     */
+    private List<Message> loadRecentHistoryFromDatabase(String userId, int limit) {
+        if (!(douyaDatabaseStore instanceof PostgresStore postgresStore)) {
+            return Collections.emptyList();
+        }
+
+        // 使用 CombinedMemoryHook 的 namespace
+        List<String> namespace = List.of("memory", "archive", "raw");
+        try {
+            // 获取该用户在 namespace 下的所有归档项 (按 ID 递增排序)
+            List<StoreItem> items = postgresStore.listItemsByPrefix(namespace, userId);
+
+            // 取最后 limit 条
+            int start = Math.max(0, items.size() - limit);
+            List<StoreItem> recentItems = items.subList(start, items.size());
+
+            return recentItems.stream().map(item -> {
+                Map<String, Object> value = item.getValue();
+                String text = (String) value.get("text");
+                String role = (String) value.get("role");
+
+                if ("assistant".equalsIgnoreCase(role)) {
+                    return new AssistantMessage(text);
+                } else {
+                    return new UserMessage(text);
+                }
+            }).collect(Collectors.toList());
+        } catch (Exception e) {
+            log.error("Failed to load history for user: " + userId, e);
+            return Collections.emptyList();
+        }
     }
 }

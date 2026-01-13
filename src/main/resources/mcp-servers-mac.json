@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "aigohotel-mcp": {
+      "url": "https://mcp.aigohotel.com/mcp",
+      "type": "streamable_http",
+      "headers": {
+        "Authorization": "Bearer mcp_396c5b8971994548b8cf6f1e9614b30f",
+        "Content-Type": "application/json"
+      }
+    }
+  }
+}
