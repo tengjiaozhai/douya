@@ -33,6 +33,11 @@ spring:
                 enabled: true
                 stdio:
                     servers-configuration: classpath:mcp-servers-system.json
+                streamable-http:
+                    connections:
+                        aigohotel-mcp:
+                            url: https://mcp.aigohotel.com
+                            endpoint: /mcp
 
 feishu:
     app-id: app-id
