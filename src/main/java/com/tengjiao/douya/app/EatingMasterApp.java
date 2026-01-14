@@ -217,7 +217,7 @@ public class EatingMasterApp {
         // 创建本地记忆搜索工具
         MemorySearchTool memorySearchTool = new MemorySearchTool(userVectorApp, userId);
         ToolCallback ragToolCallback = FunctionToolCallback.builder("memory_search",
-                (Function<MemorySearchTool.Request, MemorySearchTool.Response>) memorySearchTool::search)
+                memorySearchTool::search)
                 .description("搜索本地对话历史、用户偏好或已存背景知识。当你需要回忆之前的对话内容或了解用户特定喜好时使用。")
                 .inputType(MemorySearchTool.Request.class)
                 .build();
@@ -247,7 +247,8 @@ public class EatingMasterApp {
                 .interceptors(userPreferInterceptor)
                 .outputKey("VisionUnderstand")
                 .build();
-
+        List<ToolCallback> toolCallbackList = Arrays.asList(toolCallbackProvider.getToolCallbacks());
+        toolCallbackList.add(ragToolCallback);
         ReactAgent dailyAgent = ReactAgent.builder()
                 .name("DailyAssistant")
                 .description(DAILY_ASSISTANT_DESCRIPTION)
@@ -255,7 +256,7 @@ public class EatingMasterApp {
                 .systemPrompt(dailyAssistantSystemPrompt)
                 .instruction(dailyAssistantInstruction)
                 .hooks(preferenceLearningHook, combinedMemoryHook)
-                .tools(ragToolCallback) // 注入 RAG 工具，实现混合检索
+                .tools(toolCallbackList)
                 .outputKey("DailyAssistant")
                 .build();
 

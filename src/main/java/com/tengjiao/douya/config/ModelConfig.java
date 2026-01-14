@@ -75,7 +75,7 @@ public class ModelConfig {
             .apiKey(douBaoApiKey)
             .build();
         OpenAiChatOptions openAiChatOptions = OpenAiChatOptions.builder()
-            .model("ep-m-20251231164855-d8jn2")
+            .model("ep-m-20260114133652-mqd5d")
             .maxTokens(2000)
             .temperature(0.5)
             .topP(0.9)

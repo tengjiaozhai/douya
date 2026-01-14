@@ -69,17 +69,19 @@ mvn spring-boot:run
 
 项目采用基于 **分级存储策略** 的智能体记忆管理方案，在保证响应延迟（Latency）的同时，实现了海量上下文的持久化与语义检索。
 
-| 存储方案          | 定位     | 核心技术                             | 优势                                                  |
-| :---------------- | :------- | :----------------------------------- | :---------------------------------------------------- |
-| **L1: 热记忆**    | 实时会话 | `MemoryStore` (JVM Cache)            | 🚀 **零延迟**，承载当前活跃的上下文窗口（Sliding Window） |
-| **L2: 冷记忆**    | 历史归档 | `PostgresStore` (Persistent SQL)     | 🛡️ **高可靠**，结构化存储全量历史，支持跨会话上下文恢复   |
-| **L3: 知识记忆**  | 专家知识 | `ChromaVectorStore` (Vector DB)      | 🧠 **Agentic RAG**，按需主动检索，支持混合搜索（本地 + 联网） |
+| 存储方案         | 定位     | 核心技术                         | 优势                                                          |
+| :--------------- | :------- | :------------------------------- | :------------------------------------------------------------ |
+| **L1: 热记忆**   | 实时会话 | `MemoryStore` (JVM Cache)        | 🚀 **零延迟**，承载当前活跃的上下文窗口（Sliding Window）     |
+| **L2: 冷记忆**   | 历史归档 | `PostgresStore` (Persistent SQL) | 🛡️ **高可靠**，结构化存储全量历史，支持跨会话上下文恢复       |
+| **L3: 知识记忆** | 专家知识 | `ChromaVectorStore` (Vector DB)  | 🧠 **Agentic RAG**，按需主动检索，支持混合搜索（本地 + 联网） |
 
 #### 1. L1 内存缓存 (MemoryStore)
+
 - **作用**: 存储当前 `threadId` 下的活跃消息列表。
 - **性能**: JVM 内存读写，确保多智能体（Supervisor）频繁流转时的极致性能。
 
 #### 2. L2 自定义持久化存储 (PostgresStore)
+
 - **挑战**: Spring AI 默认的 `DatabaseStore` 使用 MySQL 语法，在 PostgreSQL 下会触发语法错误。
 - **解决**: 手动实现 `PostgresStore`，采用 `INSERT ... ON CONFLICT` 适配 PG 方言，并引入 `BIGSERIAL` 主键提升海量数据下的索引性能。
 - **冷启动恢复**: 系统具备 **Context Rehydration (上下文脱水重张)** 能力。当用户新开会话或服务重启后，系统能自动从 L2 存储中拉取最近的 N 条记录重新填入手状态。
@@ -355,3 +357,7 @@ douya
 - **自定义 Graph 监督者模式 (Custom Graph Supervisor)**: 鉴于官方 `SupervisorAgent` 的不稳定性，移除了其依赖，转为使用 Spring AI Alibaba Graph 的底层 API 手动构建 **有向循环图 (StateGraph)**。
 - **自定义 SupervisorNode**: 实现了基于 LLM 的自定义路由节点，增强了对死循环检测和上下文理解的控制力。
 - **架构透明化**: 通过显式的图构建 (`EatingMasterGraph`)，提升了多智能体协作流程的可观测性和可维护性。
+
+### 2026-01-14
+
+- **修复 Netty 类缺失问题**: 解决了 `java.lang.NoClassDefFoundError: io/netty/util/AttributeKey` 导致的启动失败问题。通过显式引入 `spring-boot-starter-webflux` 确保了 `WebClient` 及 `ReactorClientHttpConnector` 所需的 Netty 核心依赖项被正确加载。
