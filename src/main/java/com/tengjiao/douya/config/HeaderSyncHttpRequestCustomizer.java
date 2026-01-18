@@ -2,9 +2,6 @@ package com.tengjiao.douya.config;
 
 import io.modelcontextprotocol.client.transport.customizer.McpSyncHttpClientRequestCustomizer;
 import io.modelcontextprotocol.common.McpTransportContext;
-import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.net.URI;
 import java.net.http.HttpRequest;
@@ -25,7 +22,8 @@ public class HeaderSyncHttpRequestCustomizer implements McpSyncHttpClientRequest
     }
 
     @Override
-    public void customize(HttpRequest.Builder builder, String method, URI endpoint, String body, McpTransportContext context) {
+    public void customize(HttpRequest.Builder builder, String method, URI endpoint, String body,
+            McpTransportContext context) {
         // 先添加固定的 headers
         if (!headers.isEmpty()) {
             headers.forEach((name, value) -> {
@@ -34,6 +32,5 @@ public class HeaderSyncHttpRequestCustomizer implements McpSyncHttpClientRequest
                 }
             });
         }
-
     }
 }

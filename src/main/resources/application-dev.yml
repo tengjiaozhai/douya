@@ -38,6 +38,7 @@ spring:
                         aigohotel-mcp:
                             url: https://mcp.aigohotel.com
                             endpoint: /mcp
+                request-timeout: 3600s
 
 feishu:
     app-id: app-id

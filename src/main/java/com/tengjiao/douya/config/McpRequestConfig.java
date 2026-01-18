@@ -20,18 +20,20 @@ import java.util.Map;
 public class McpRequestConfig {
     @Value("${aigohotel-mcp.api-key}")
     private String apiKey;
+
     @Bean
-    public McpSyncHttpClientRequestCustomizer mcpAsyncHttpClientRequestCustomizer() {
+    public McpSyncHttpClientRequestCustomizer mcpSyncHttpClientRequestCustomizer() {
         // 可以设置默认的 headers，但 Authorization 会从当前请求中动态获取
         Map<String, String> headers = new HashMap<>();
         headers.put("Authorization", "Bearer " + apiKey);
+        headers.put("Accept", "application/json");
         return new HeaderSyncHttpRequestCustomizer(headers);
     }
 
     @Bean
     public HttpClient httpClient() {
         return HttpClient.newBuilder()
-                .version(HttpClient.Version.HTTP_2) // 尝试使用 HTTP/2 以避免 HTTP/1.1 chunked encoding 问题
+                .version(HttpClient.Version.HTTP_1_1) // 明确使用 HTTP/1.1，因为 Tengine 似乎不支持 H2 的 SSE 模式
                 .connectTimeout(Duration.ofSeconds(20))
                 .build();
     }
