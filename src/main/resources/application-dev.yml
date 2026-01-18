@@ -42,3 +42,11 @@ spring:
 feishu:
     app-id: app-id
     app-secret: app-secret
+aigohotel-mcp:
+    api-key: api-key
+aliyun:
+    oss:
+        endpoint: ${ALIYUN_OSS_ENDPOINT:your-endpoint}
+        access-key-id: ${ALIYUN_OSS_ACCESS_KEY_ID:your-access-key-id}
+        access-key-secret: ${ALIYUN_OSS_ACCESS_KEY_SECRET:your-access-key-secret}
+        bucket-name: ${ALIYUN_OSS_BUCKET_NAME:your-bucket-name}

@@ -361,3 +361,29 @@ douya
 ### 2026-01-14
 
 - **修复 Netty 类缺失问题**: 解决了 `java.lang.NoClassDefFoundError: io/netty/util/AttributeKey` 导致的启动失败问题。通过显式引入 `spring-boot-starter-webflux` 确保了 `WebClient` 及 `ReactorClientHttpConnector` 所需的 Netty 核心依赖项被正确加载。
+
+### 2026-01-17
+
+  2. 升级 `HttpClient` 为 **HTTP/2** 协议（在 `McpRequestConfig` 中配置），利用 HTTP/2 的帧机制避免 HTTP/1.1 分块传输编码可能引发的解析异常。（Issues #2740, #3742）
+
+- **阿里云 OSS 集成**: 实现了 `OssService` 工具类，支持将图片等资源上传至阿里云 OSS 并生成访问链接。主要用于支持 RAG 流程中文档切分后的图片存储与召回需求。
+
+### 阿里云 OSS 集成 (Aliyun OSS Integration)
+
+项目集成了阿里云 OSS 服务，用于存储和检索各种媒体资源（如 RAG 文档切分中的图片）。
+
+1.  **功能**:
+    - 支持文件流上传。
+    - 支持本地文件路径上传。
+    - 自动生成文件的公共访问 URL，便于在 RAG 流程中回溯图片。
+
+2.  **配置**:
+    在 `application.yml` 或 `application-local.yml` 中配置 OSS 密钥：
+    ```yaml
+    aliyun:
+      oss:
+        endpoint: <YOUR_OSS_ENDPOINT>
+        access-key-id: <YOUR_ACCESS_KEY_ID>
+        access-key-secret: <YOUR_ACCESS_KEY_SECRET>
+        bucket-name: <YOUR_BUCKET_NAME>
+    ```
