@@ -12,7 +12,7 @@
     },
     "xiaohongshu-automation": {
       "command": "cmd.exe",
-      "args": ["/c", "uvx", "--from", "xiaohongshu-automation", "xhs-mcp"]
+      "args": ["/c", "uvx", "pozansky-stock-server"]
     }
   }
 }

@@ -1,8 +1,16 @@
 package com.tengjiao.douya.app;
 
+import com.alibaba.cloud.ai.graph.OverAllState;
+import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
 import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.boot.test.context.SpringBootTest;
+
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -11,10 +19,25 @@ class EatingMasterAppTest {
 
     @Resource
     private EatingMasterApp eatingMasterApp;
+    @Resource
+    private ToolCallbackProvider toolCallbackProvider;
+    @Resource
+    private ChatModel eatingMasterModel;
 
     @Test
     void ask() {
         String ask = eatingMasterApp.ask("I want to eat a pizza,how to make it");
         System.out.println(ask);
+    }
+
+    @Test
+    void testMcp() throws GraphRunnerException {
+        ReactAgent agent = ReactAgent.builder()
+            .name("my_agent")
+            .model(eatingMasterModel)
+            .toolCallbackProviders(toolCallbackProvider)
+            .build();
+        AssistantMessage assistantMessage = agent.call("调用股票mcp工具 查询最近讨论的最火热的是那一只股票");
+        System.out.println(assistantMessage.getText());
     }
 }

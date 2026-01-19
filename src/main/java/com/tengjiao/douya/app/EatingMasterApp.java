@@ -247,8 +247,7 @@ public class EatingMasterApp {
                 .interceptors(userPreferInterceptor)
                 .outputKey("VisionUnderstand")
                 .build();
-        List<ToolCallback> toolCallbackList = Arrays.asList(toolCallbackProvider.getToolCallbacks());
-        toolCallbackList.add(ragToolCallback);
+
         ReactAgent dailyAgent = ReactAgent.builder()
                 .name("DailyAssistant")
                 .description(DAILY_ASSISTANT_DESCRIPTION)
@@ -256,7 +255,6 @@ public class EatingMasterApp {
                 .systemPrompt(dailyAssistantSystemPrompt)
                 .instruction(dailyAssistantInstruction)
                 .hooks(preferenceLearningHook, combinedMemoryHook)
-                .tools(toolCallbackList)
                 .outputKey("DailyAssistant")
                 .build();
 
