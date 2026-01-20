@@ -364,9 +364,19 @@ douya
 
 ### 2026-01-17
 
-  2. 升级 `HttpClient` 为 **HTTP/2** 协议（在 `McpRequestConfig` 中配置），利用 HTTP/2 的帧机制避免 HTTP/1.1 分块传输编码可能引发的解析异常。（Issues #2740, #3742）
+  2. 升级 `HttpClient` 为 **HTTP/2** 协议(在 `McpRequestConfig` 中配置),利用 HTTP/2 的帧机制避免 HTTP/1.1 分块传输编码可能引发的解析异常。(Issues #2740, #3742)
 
-- **阿里云 OSS 集成**: 实现了 `OssService` 工具类，支持将图片等资源上传至阿里云 OSS 并生成访问链接。主要用于支持 RAG 流程中文档切分后的图片存储与召回需求。
+- **阿里云 OSS 集成**: 实现了 `OssService` 工具类,支持将图片等资源上传至阿里云 OSS 并生成访问链接。主要用于支持 RAG 流程中文档切分后的图片存储与召回需求。
+
+### 2026-01-20
+
+- **PDF 文档切分与向量化**: 实现了完整的 PDF 文档处理能力,支持智能文档解析、图片提取与 OSS 存储、语义切分和向量化。
+  - **智能图片关联**: 采用方案 B,根据页码智能关联图片到对应文本片段,避免冗余同时确保准确性。
+  - **统一图片格式**: 将 PDF 中的所有图片统一转换为 PNG 格式,确保兼容性和一致性。
+  - **异步分批处理**: 支持大文档异步处理,避免超时,提升系统稳定性。
+  - **元数据增强**: 在向量元数据中包含图片 OSS URL、页码、片段索引等信息,支持多模态召回。
+  - **完整流程**: PDF 解析 → 图片提取 → OSS 上传 → 文本切分 → 智能关联 → 向量化存储。
+
 
 ### 阿里云 OSS 集成 (Aliyun OSS Integration)
 
@@ -387,3 +397,145 @@ douya
         access-key-secret: <YOUR_ACCESS_KEY_SECRET>
         bucket-name: <YOUR_BUCKET_NAME>
     ```
+
+### PDF 文档切分与向量化 (PDF Document Parsing & Vectorization)
+
+项目实现了智能 PDF 文档处理能力,支持文档解析、图片提取、向量化存储,为 RAG 应用提供强大的文档理解基础。
+
+#### 核心特性
+
+1. **智能文档解析**:
+   - 使用 Apache PDFBox 解析 PDF 文档
+   - 按页提取文本内容
+   - 支持复杂 PDF 格式
+
+2. **图片提取与存储**:
+   - 自动提取 PDF 中的所有图片
+   - 统一转换为 PNG 格式,确保兼容性
+   - 上传至阿里云 OSS,生成可访问 URL
+   - 智能关联:根据页码将图片关联到对应文本片段
+
+3. **语义切分**:
+   - 使用 `TokenTextSplitter` 进行智能切分
+   - 默认 800 tokens/片段,200 tokens 重叠
+   - 避免语义断裂,提升检索质量
+
+4. **向量化存储**:
+   - 集成 Chroma 向量数据库
+   - 使用 DashScope Embedding 模型
+   - 元数据包含图片 URL,支持多模态召回
+
+5. **异步处理**:
+   - 支持大文档异步分批处理
+   - 避免超时,提升系统稳定性
+
+#### 处理流程
+
+```mermaid
+graph TB
+    A[PDF 文档] --> B[PDFBox Parser]
+    B --> C[按页提取文本]
+    B --> D[提取图片列表]
+    
+    C --> E[TokenTextSplitter<br/>800 tokens/chunk]
+    E --> F[文本片段列表]
+    
+    D --> G[转换为 PNG]
+    G --> H[OssService 上传]
+    H --> I[生成 OSS URL]
+    
+    F --> J[智能关联图片]
+    I --> J
+    
+    J --> K[构建 Document<br/>+ 元数据]
+    K --> L[DashScope Embedding]
+    L --> M[ChromaVectorStore]
+    
+    style A fill:#e1f5ff
+    style M fill:#d4edda
+    style I fill:#fff3cd
+    style J fill:#fce4ec
+```
+
+#### 元数据设计
+
+每个向量化的文档片段包含以下元数据:
+
+```json
+{
+  "userId": "user123",
+  "documentName": "产品手册.pdf",
+  "pageNumber": 5,
+  "chunkIndex": 2,
+  "images": [
+    {
+      "fileName": "产品手册_page5_img1.png",
+      "ossUrl": "https://bucket.oss-cn-beijing.aliyuncs.com/documents/产品手册/page5_img1.png",
+      "position": "page5"
+    }
+  ],
+  "timestamp": "2026-01-20T22:30:00Z"
+}
+```
+
+#### 使用示例
+
+```java
+@Autowired
+private PdfDocumentService pdfDocumentService;
+
+// 同步处理 PDF 文档
+try (InputStream inputStream = new FileInputStream("document.pdf")) {
+    PdfProcessResult result = pdfDocumentService.processPdfDocument(
+        inputStream,
+        "产品手册.pdf"
+    );
+    
+    System.out.println("总页数: " + result.getTotalPages());
+    System.out.println("提取图片: " + result.getImageCount());
+    System.out.println("文档片段: " + result.getChunkCount());
+}
+
+// 异步处理大文档
+CompletableFuture<PdfProcessResult> future = 
+    pdfDocumentService.processPdfDocumentAsync(inputStream, fileName);
+```
+
+#### 向量检索与图片回溯
+
+```java
+// 检索相关文档
+List<Document> results = vectorStore.similaritySearch(
+    SearchRequest.query("产品特性介绍")
+        .withTopK(5)
+        .withSimilarityThreshold(0.7)
+        .withFilterExpression("userId == 'user123'")
+);
+
+// 提取关联的图片 URL
+results.forEach(doc -> {
+    List<Map<String, Object>> images = 
+        (List<Map<String, Object>>) doc.getMetadata().get("images");
+    
+    if (images != null) {
+        images.forEach(img -> {
+            String ossUrl = (String) img.get("ossUrl");
+            // 直接访问图片或传递给多模态模型
+            System.out.println("关联图片: " + ossUrl);
+        });
+    }
+});
+```
+
+#### OSS 存储结构
+
+```
+documents/
+  └── {documentName}/
+      ├── page1_img1.png
+      ├── page1_img2.png
+      ├── page2_img1.png
+      └── ...
+```
+
+## 开发者
