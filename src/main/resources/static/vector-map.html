@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Douya 向量自省仪表盘 - Premium Visualizer</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Inter:wght@300;400;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --primary: #6366f1;
+        --secondary: #a855f7;
+        --bg: #0f172a;
+        --card-bg: rgba(30, 41, 59, 0.7);
+        --text: #f8fafc;
+        --accent: #22d3ee;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        overflow-x: hidden;
+        background-image: radial-gradient(
+            circle at 20% 20%,
+            rgba(99, 102, 241, 0.15) 0%,
+            transparent 40%
+          ),
+          radial-gradient(
+            circle at 80% 80%,
+            rgba(168, 85, 247, 0.15) 0%,
+            transparent 40%
+          );
+      }
+
+      header {
+        padding: 2rem;
+        text-align: center;
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      h1 {
+        font-family: 'Outfit', sans-serif;
+        font-size: 2.5rem;
+        background: linear-gradient(to right, var(--primary), var(--secondary));
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.5rem;
+      }
+
+      .container {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 2rem;
+      }
+
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 1.5rem;
+        margin-bottom: 2rem;
+      }
+
+      .stat-card {
+        background: var(--card-bg);
+        padding: 1.5rem;
+        border-radius: 1rem;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        text-align: center;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      }
+
+      .stat-value {
+        font-size: 2rem;
+        font-weight: 600;
+        color: var(--accent);
+      }
+
+      .stat-label {
+        font-size: 0.875rem;
+        color: #94a3b8;
+        margin-top: 0.5rem;
+      }
+
+      .vector-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 1.5rem;
+      }
+
+      .vector-card {
+        background: var(--card-bg);
+        border-radius: 1rem;
+        padding: 1.5rem;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        cursor: pointer;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .vector-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.5);
+        border-color: rgba(99, 102, 241, 0.5);
+      }
+
+      .doc-id {
+        font-family: monospace;
+        font-size: 0.75rem;
+        color: #64748b;
+        margin-bottom: 0.5rem;
+      }
+
+      .doc-content {
+        font-size: 0.9rem;
+        line-height: 1.5;
+        color: #e2e8f0;
+        display: -webkit-box;
+        -webkit-line-clamp: 4;
+        line-clamp: 4;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        margin-bottom: 1rem;
+      }
+
+      /* 向量“指纹”视觉化 */
+      .vector-viz {
+        height: 40px;
+        width: 100%;
+        background: #000;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        overflow: hidden;
+        gap: 1px;
+        padding: 2px;
+      }
+
+      .viz-bar {
+        flex: 1;
+        height: 100%;
+        background: var(--primary);
+        opacity: 0.8;
+        transition: transform 0.3s ease;
+      }
+
+      .meta-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+
+      .tag {
+        font-size: 0.7rem;
+        padding: 0.2rem 0.5rem;
+        background: rgba(99, 102, 241, 0.1);
+        color: var(--primary);
+        border-radius: 0.5rem;
+        border: 1px solid rgba(99, 102, 241, 0.2);
+      }
+
+      #detail-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        backdrop-filter: blur(5px);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem;
+      }
+
+      .modal-content {
+        background: #1e293b;
+        max-width: 800px;
+        width: 100%;
+        max-height: 90vh;
+        border-radius: 1.5rem;
+        padding: 2.5rem;
+        position: relative;
+        overflow-y: auto;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .close-btn {
+        position: absolute;
+        top: 1.5rem;
+        right: 1.5rem;
+        font-size: 2rem;
+        cursor: pointer;
+        color: #94a3b8;
+      }
+
+      .loader {
+        width: 48px;
+        height: 48px;
+        border: 5px solid #fff;
+        border-bottom-color: var(--primary);
+        border-radius: 50%;
+        display: block;
+        margin: 50px auto;
+        animation: rotation 1s linear infinite;
+      }
+
+      @keyframes rotation {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+
+      .vector-raw {
+        margin-top: 1.5rem;
+        padding: 1rem;
+        background: #000;
+        border-radius: 0.5rem;
+        font-family: monospace;
+        font-size: 0.75rem;
+        color: var(--accent);
+        max-height: 200px;
+        overflow-y: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Douya Vector Insights</h1>
+      <p style="color: #94a3b8">
+        实时监控向量库状态与相似度拓扑 | Premium Visualization
+      </p>
+    </header>
+
+    <div class="container">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-value" id="count-docs">0</div>
+          <div class="stat-label">总向量碎片</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="dim-docs">N/A</div>
+          <div class="stat-label">向量维度</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="collection-name">-</div>
+          <div class="stat-label">当前集合</div>
+        </div>
+      </div>
+
+      <div id="loader" class="loader"></div>
+      <div id="vector-container" class="vector-grid"></div>
+    </div>
+
+    <div id="detail-modal">
+      <div class="modal-content">
+        <span class="close-btn" onclick="closeModal()">&times;</span>
+        <h2 id="modal-title" style="margin-bottom: 1rem; color: var(--accent)">
+          文档详情
+        </h2>
+        <div
+          id="modal-body"
+          style="line-height: 1.6; color: #e2e8f0; white-space: pre-wrap"
+        ></div>
+        <div id="modal-meta" class="meta-tags" style="margin-top: 2rem"></div>
+        <h3 style="margin-top: 2rem; font-size: 1rem; color: #94a3b8">
+          原始向量采样 (High Dimension View)
+        </h3>
+        <div id="modal-vector" class="vector-raw"></div>
+      </div>
+    </div>
+
+    <script>
+      const container = document.getElementById('vector-container');
+      const loader = document.getElementById('loader');
+
+      async function fetchData() {
+        try {
+          // 注意 context-path 是 /api
+          const response = await fetch(
+            '/api/douya/eating/vector/collection/raw?limit=100'
+          );
+          const data = await response.json();
+
+          if (data.error) {
+            container.innerHTML = `<div style="color: #ef4444; text-align: center; grid-column: 1/-1;">错误: ${data.error}</div>`;
+            loader.style.display = 'none';
+            return;
+          }
+
+          renderDocs(data);
+          updateStats(data);
+          loader.style.display = 'none';
+        } catch (e) {
+          console.error(e);
+          container.innerHTML = `<div style="color: #ef4444; text-align: center; grid-column: 1/-1;">无法连接后端 API</div>`;
+          loader.style.display = 'none';
+        }
+      }
+
+      function updateStats(data) {
+        document.getElementById('count-docs').textContent = data.ids.length;
+        if (data.embeddings && data.embeddings.length > 0) {
+          document.getElementById('dim-docs').textContent =
+            data.embeddings[0].length;
+        }
+        // 获取集合名称可以通过另一个接口，或者硬编码
+        document.getElementById('collection-name').textContent =
+          'EatingMasterCollection';
+      }
+
+      function renderDocs(data) {
+        const { ids, documents, metadatas, embeddings } = data;
+
+        ids.forEach((id, index) => {
+          const doc = documents[index];
+          // 容错处理：metadatas 数组中可能包含 null
+          const meta = metadatas[index] || {};
+          const vector = embeddings ? embeddings[index] : null;
+
+          const card = document.createElement('div');
+          card.className = 'vector-card';
+          card.onclick = () => showDetail(id, doc, meta, vector);
+
+          const viz = vector ? renderViz(vector) : '';
+
+          card.innerHTML = `
+                    <div class="doc-id">ID: ${id.substring(0, 8)}...</div>
+                    <div class="doc-content">${escapeHtml(doc)}</div>
+                    ${viz}
+                    <div class="meta-tags">
+                        <span class="tag">Page: ${meta.pageNumber || '?'}</span>
+                        <span class="tag">${
+                          meta.documentName || 'Unknown'
+                        }</span>
+                        ${
+                          meta.is_child
+                            ? '<span class="tag" style="color: #fbbf24">Child</span>'
+                            : ''
+                        }
+                    </div>
+                `;
+          container.appendChild(card);
+        });
+      }
+
+      function renderViz(vector) {
+        // 采样一部分维度来展示
+        const sampleSize = 60;
+        const step = Math.floor(vector.length / sampleSize);
+        let bars = '';
+
+        for (let i = 0; i < vector.length; i += step) {
+          const val = vector[i];
+          // 归一化高度（假设值在 -1 到 1 之间）
+          const height = Math.abs(val) * 100;
+          // 颜色根据正负变化
+          const color = val > 0 ? 'var(--accent)' : 'var(--secondary)';
+          bars += `<div class="viz-bar" style="height: ${height}%; background: ${color}"></div>`;
+        }
+
+        return `<div style="margin: 10px 0; font-size: 0.7rem; color: #64748b">Vector Fingerprint (sampled)</div>
+                    <div class="vector-viz">${bars}</div>`;
+      }
+
+      function showDetail(id, content, meta, vector) {
+        const modal = document.getElementById('detail-modal');
+        const body = document.getElementById('modal-body');
+        const metaContainer = document.getElementById('modal-meta');
+        const vectorContainer = document.getElementById('modal-vector');
+
+        // 确保 meta 不为 null
+        const safeMeta = meta || {};
+
+        // 优先显示完整的 parent_text
+        const fullContent = safeMeta.parent_text || content;
+        body.textContent = fullContent;
+
+        metaContainer.innerHTML = '';
+        Object.entries(safeMeta).forEach(([key, value]) => {
+          if (key === 'parent_text') return;
+          const tag = document.createElement('span');
+          tag.className = 'tag';
+          tag.textContent = `${key}: ${JSON.stringify(value)}`;
+          metaContainer.appendChild(tag);
+        });
+
+        vectorContainer.textContent = vector
+          ? JSON.stringify(vector)
+          : 'No vector data available';
+
+        modal.style.display = 'flex';
+      }
+
+      function closeModal() {
+        document.getElementById('detail-modal').style.display = 'none';
+      }
+
+      function escapeHtml(text) {
+        const map = {
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#039;',
+        };
+        return text.replace(/[&<>"']/g, (m) => map[m]);
+      }
+
+      fetchData();
+    </script>
+  </body>
+</html>
