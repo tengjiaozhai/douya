@@ -61,4 +61,11 @@ public interface OssService {
      * @return The bucket name.
      */
     String getBucketName();
+
+    /**
+     * Gets the file name.
+     * @param objectName The name of the object in OSS.
+     * @return The file name.
+     */
+    String getFileUrl(String objectName);
 }

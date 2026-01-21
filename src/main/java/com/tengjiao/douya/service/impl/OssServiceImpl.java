@@ -126,7 +126,8 @@ public class OssServiceImpl implements OssService {
         return ossConfig.getBucketName();
     }
 
-    private String getFileUrl(String objectName) {
+    @Override
+    public String getFileUrl(String objectName) {
         String endpoint = ossConfig.getEndpoint();
         // Construct the public URL
         // Format: https://{bucket}.{endpoint}/{objectName}

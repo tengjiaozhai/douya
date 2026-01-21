@@ -188,9 +188,13 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
                                     fileName);
 
                             // 上传到 OSS
-                            ossUrl = ossService.uploadFile(
-                                    objectName,
-                                    new ByteArrayInputStream(imageBytes));
+                            if (!ossService.doesObjectExist(objectName)){
+                                ossUrl = ossService.uploadFile(
+                                        objectName,
+                                        new ByteArrayInputStream(imageBytes));
+                            }else {
+                                ossUrl = ossService.getFileUrl(objectName);
+                            }
 
                             // 加入缓存
                             uploadedUrls.put(cosStream, ossUrl);
