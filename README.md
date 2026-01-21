@@ -63,6 +63,10 @@ mvn spring-boot:run
 项目启动后，默认运行在 `8787` 端口。
 
 - **API 文档 (Knife4j)**: [http://localhost:8787/api/doc.html](http://localhost:8787/api/doc.html)
+- **向量库可视化仪表**: [http://localhost:8787/api/vector-map.html](http://localhost:8787/api/vector-map.html) (推荐：实时监控向量入库状态与高维指纹分布)
+- **PDF 文档上传与切分**: `POST /api/douya/eating/pdf/upload` (上传并立即触发 Parent-Child 切分与向量化)
+- **向量库状态查询**: `GET /api/douya/eating/vector/status?limit=100` (查看内容概要)
+- **向量库去重清洗**: `POST /api/douya/eating/vector/clean` (手动触发内容级 Hash 去重)
 - **健康检查**: [http://localhost:8787/api/douya/hello](http://localhost:8787/api/douya/hello)
 
 ### 记忆存储架构 (Hierarchical Memory Architecture)
@@ -327,6 +331,22 @@ douya
 
 ## 更新日志
 
+### 2026-01-21
+
+- **PDF 图片提取去重优化**: 修复了 PDF 处理中重复提取和上传相同图片的问题，显著降低 OSS 存储成本。
+  - **对象级去重**: 通过识别图片的 `COSStream` 标识符，确保同一张图片在 PDF 多页中复用时仅执行一次 OSS 上传。
+  - **检索性能提升**: 在文本切分阶段引入图片预分组（Grouping）机制，将图片与文本片段关联的效率从 O(N^2) 优化为 O(N)。
+  - **全局命名规范**: 采用全局统一样式的图片命名规则，避免多页重复上传导致的命名冲突。
+- **PDF 切分策略升级 (Parent-Child)**: 实现了“清洗先行”与“小到大” (Small-to-Big) 检索策略。
+  - **预清洗机制**: 自动识别并剔除跨页重复的页眉页脚，过滤 ASCII 乱码。
+  - **双层切分**: 采用 Child (200 tokens) 进行向量索引，Parent (1200 tokens) 提供上下文。
+  - **自动上下文扩展**: 在 `UserVectorApp` 检索端实现逻辑，自动将命中的子块替换为其背后的 `parent_text` 并进行智能去重，确保喂给 LLM 的是宏观且完整的语义。
+- **向量库自省与管理**:
+  - **自省接口**: 新增 `/vector/status` (概要说明) 与 `/vector/collection/raw` (详尽数据) 接口，支持实时查看向量内容与元数据。
+  - **一键清洗**: 实现 `/vector/clean` (POST) 接口，支持内容级 Hash 去重，彻底解决 PDF 重复上传及对话重复录入导致的库冗余。
+  - **可视化看板**: 提供首个 **向量可视化仪表盘** (`vector-map.html`)，支持高维指纹渲染与父子块文本穿透显示。
+- **功能集成**: 在 `EatingMasterController` 中集成 PDF 上传接口，支持通过 API 直接上传并处理文档。
+
 ### 2026-01-13
 
 - **Agentic RAG 模式升级**: 将 RAG 逻辑从被动注入的 Hook 模式重构为智能体自主调用的 Tool 模式 (`MemorySearchTool`)。
@@ -364,7 +384,7 @@ douya
 
 ### 2026-01-17
 
-  2. 升级 `HttpClient` 为 **HTTP/2** 协议(在 `McpRequestConfig` 中配置),利用 HTTP/2 的帧机制避免 HTTP/1.1 分块传输编码可能引发的解析异常。(Issues #2740, #3742)
+2. 升级 `HttpClient` 为 **HTTP/2** 协议(在 `McpRequestConfig` 中配置),利用 HTTP/2 的帧机制避免 HTTP/1.1 分块传输编码可能引发的解析异常。(Issues #2740, #3742)
 
 - **阿里云 OSS 集成**: 实现了 `OssService` 工具类,支持将图片等资源上传至阿里云 OSS 并生成访问链接。主要用于支持 RAG 流程中文档切分后的图片存储与召回需求。
 
@@ -377,12 +397,12 @@ douya
   - **元数据增强**: 在向量元数据中包含图片 OSS URL、页码、片段索引等信息,支持多模态召回。
   - **完整流程**: PDF 解析 → 图片提取 → OSS 上传 → 文本切分 → 智能关联 → 向量化存储。
 
-
 ### 阿里云 OSS 集成 (Aliyun OSS Integration)
 
 项目集成了阿里云 OSS 服务，用于存储和检索各种媒体资源（如 RAG 文档切分中的图片）。
 
 1.  **功能**:
+
     - 支持文件流上传。
     - 支持本地文件路径上传。
     - 自动生成文件的公共访问 URL，便于在 RAG 流程中回溯图片。
@@ -405,22 +425,28 @@ douya
 #### 核心特性
 
 1. **智能文档解析**:
+
    - 使用 Apache PDFBox 解析 PDF 文档
    - 按页提取文本内容
    - 支持复杂 PDF 格式
 
 2. **图片提取与存储**:
+
    - 自动提取 PDF 中的所有图片
    - 统一转换为 PNG 格式,确保兼容性
    - 上传至阿里云 OSS,生成可访问 URL
    - 智能关联:根据页码将图片关联到对应文本片段
 
-3. **语义切分**:
-   - 使用 `TokenTextSplitter` 进行智能切分
-   - 默认 800 tokens/片段,200 tokens 重叠
-   - 避免语义断裂,提升检索质量
+3. **语义切分 (Parent-Child 策略)**:
+
+   - 使用双层 `TokenTextSplitter` 进行嵌套切分。
+   - **Child Chunk**: 200 tokens, 50 tokens 重叠。用于向量检索，对应高灵敏度。
+   - **Parent Chunk**: 1200 tokens, 200 tokens 重叠。作为上下文注入 LLM，确保语义连贯。
+   - **清洗先行**: 切分前自动剔除重复页眉页脚及控制字符干扰。
+   - **检索端自动扩展**: 系统在检索时若命中子块，会自动从元数据提取 `parent_text` 替换原始内容，并进行智能去重，解决“精准检索 vs 丰富上下文”的矛盾。
 
 4. **向量化存储**:
+
    - 集成 Chroma 向量数据库
    - 使用 DashScope Embedding 模型
    - 元数据包含图片 URL,支持多模态召回
@@ -436,21 +462,21 @@ graph TB
     A[PDF 文档] --> B[PDFBox Parser]
     B --> C[按页提取文本]
     B --> D[提取图片列表]
-    
+
     C --> E[TokenTextSplitter<br/>800 tokens/chunk]
     E --> F[文本片段列表]
-    
+
     D --> G[转换为 PNG]
     G --> H[OssService 上传]
     H --> I[生成 OSS URL]
-    
+
     F --> J[智能关联图片]
     I --> J
-    
+
     J --> K[构建 Document<br/>+ 元数据]
     K --> L[DashScope Embedding]
     L --> M[ChromaVectorStore]
-    
+
     style A fill:#e1f5ff
     style M fill:#d4edda
     style I fill:#fff3cd
@@ -490,14 +516,14 @@ try (InputStream inputStream = new FileInputStream("document.pdf")) {
         inputStream,
         "产品手册.pdf"
     );
-    
+
     System.out.println("总页数: " + result.getTotalPages());
     System.out.println("提取图片: " + result.getImageCount());
     System.out.println("文档片段: " + result.getChunkCount());
 }
 
 // 异步处理大文档
-CompletableFuture<PdfProcessResult> future = 
+CompletableFuture<PdfProcessResult> future =
     pdfDocumentService.processPdfDocumentAsync(inputStream, fileName);
 ```
 
@@ -514,9 +540,9 @@ List<Document> results = vectorStore.similaritySearch(
 
 // 提取关联的图片 URL
 results.forEach(doc -> {
-    List<Map<String, Object>> images = 
+    List<Map<String, Object>> images =
         (List<Map<String, Object>>) doc.getMetadata().get("images");
-    
+
     if (images != null) {
         images.forEach(img -> {
             String ossUrl = (String) img.get("ossUrl");

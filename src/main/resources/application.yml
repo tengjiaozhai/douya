@@ -16,7 +16,10 @@ spring:
     vectorstore:
       observations:
         log-query-response: true
-
+  servlet:
+    multipart:
+      max-file-size: 100MB       # 单个文件的最大限制
+      max-request-size: 200MB   # 单次请求的总限制（包含文件和其他表单数据）
 logging:
   level:
     org.springframework.jdbc.core.JdbcTemplate: DEBUG

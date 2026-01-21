@@ -2,12 +2,17 @@ package com.tengjiao.douya.app;
 
 
 
+import org.springframework.ai.chroma.vectorstore.ChromaApi;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 用户向量服务 - 吃饭大师场景
@@ -19,9 +24,11 @@ import java.util.List;
 @Component
 public class UserVectorApp {
     private final VectorStore chromaVectorStore;
+    private final ChromaApi chromaApi;
 
-    public UserVectorApp(VectorStore chromaVectorStore) {
+    public UserVectorApp(VectorStore chromaVectorStore, ChromaApi chromaApi) {
         this.chromaVectorStore = chromaVectorStore;
+        this.chromaApi = chromaApi;
     }
 
     /**
@@ -86,7 +93,10 @@ public class UserVectorApp {
                 .build();
 
         // 执行相似度搜索
-        return chromaVectorStore.similaritySearch(searchRequest);
+        List<Document> docs = chromaVectorStore.similaritySearch(searchRequest);
+        
+        // 应用 Parent-Child 策略：替换为父块文本并去重
+        return applyParentContext(docs);
     }
 
     /**
@@ -128,7 +138,8 @@ public class UserVectorApp {
         SearchRequest searchRequest = requestBuilder.build();
 
         // 执行搜索
-        return chromaVectorStore.similaritySearch(searchRequest);
+        List<Document> docs = chromaVectorStore.similaritySearch(searchRequest);
+        return applyParentContext(docs);
     }
 
     /**
@@ -148,7 +159,142 @@ public class UserVectorApp {
                 .similarityThreshold(0.7)
                 .build();
 
-        return chromaVectorStore.similaritySearch(searchRequest);
+        List<Document> docs = chromaVectorStore.similaritySearch(searchRequest);
+        return applyParentContext(docs);
+    }
+
+    /**
+     * 应用 Parent-Child 扩展策略并去重
+     * 保持原始排序（基于 LinkedHashMap）
+     */
+    private List<Document> applyParentContext(List<Document> docs) {
+        if (docs == null || docs.isEmpty()) {
+            return docs;
+        }
+
+        Map<String, Document> processedMap = new LinkedHashMap<>();
+
+        for (Document doc : docs) {
+            String parentText = (String) doc.getMetadata().get("parent_text");
+            String contentToUse = (parentText != null && !parentText.trim().isEmpty()) 
+                    ? parentText 
+                    : doc.getText();
+
+            // 如果该父块（或同内容片段）尚未加入，则加入
+            // 这样可以确保如果多个子块命中同一个父块，只向 LLM 提供一次完整的父块上下文
+            if (!processedMap.containsKey(contentToUse)) {
+                Document processedDoc = Document.builder()
+                        .id(doc.getId())
+                        .text(contentToUse)
+                        .metadata(doc.getMetadata())
+                        .score(doc.getScore())
+                        .build();
+                processedMap.put(contentToUse, processedDoc);
+            }
+        }
+
+        return new ArrayList<>(processedMap.values());
+    }
+
+    /**
+     * 直接通过 ChromaApi 获取原始结构数据
+     * 参考底层结构，返回包含 ids, documents, metadatas 的原始 Map
+     */
+    public Map<String, Object> getChromaRawData(String collectionName, Integer limit) {
+        int k = (limit != null && limit > 0) ? limit : 100;
+        String tenant = "SpringAiTenant";
+        String database = "SpringAiDatabase";
+
+        // 1. 先获取 collection 以获得 ID
+        ChromaApi.Collection collection = chromaApi.getCollection(tenant, database, collectionName);
+        if (collection == null) {
+            return Map.of("error", "Collection not found: " + collectionName);
+        }
+
+        // 2. 构建原始 API 请求
+        // 源码中 GetEmbeddingsRequest 的构造函数之一支持 (ids, where, limit, offset, include)
+        ChromaApi.GetEmbeddingsRequest getRequest = new ChromaApi.GetEmbeddingsRequest(
+                null,           // ids
+                null,           // where clause
+                k,              // limit
+                0,              // offset
+                List.of(ChromaApi.QueryRequest.Include.DOCUMENTS, 
+                        ChromaApi.QueryRequest.Include.METADATAS,
+                        ChromaApi.QueryRequest.Include.EMBEDDINGS)
+        );
+
+        // 3. 调用底层 API
+        ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(tenant, database, collection.id(), getRequest);
+
+        // 4. 组装结果，尽可能贴合用户展示的格式
+        Map<String, Object> result = new HashMap<>();
+        if (response != null) {
+            result.put("ids", response.ids());
+            result.put("documents", response.documents());
+            result.put("metadatas", response.metadata());
+            result.put("embeddings", response.embeddings());
+        }
+        return result;
+    }
+
+    /**
+     * 清理 Collection 中的重复数据
+     * 策略：以 text 内容完全一致作为重复判定标准，仅保留最早的一条
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> cleanupDuplicates(String collectionName) {
+        String tenant = "SpringAiTenant";
+        String database = "SpringAiDatabase";
+
+        // 1. 获取 Collection 信息
+        ChromaApi.Collection collection = chromaApi.getCollection(tenant, database, collectionName);
+        if (collection == null) {
+            return Map.of("error", "Collection not found: " + collectionName);
+        }
+
+        // 2. 获取全量数据进行扫描 (此处 limit 设置较大以覆盖现有测试数据)
+        Map<String, Object> rawData = getChromaRawData(collectionName, 5000);
+        List<String> ids = (List<String>) rawData.get("ids");
+        List<String> documents = (List<String>) rawData.get("documents");
+
+        if (ids == null || documents == null || ids.isEmpty()) {
+            return Map.of("message", "No data to clean", "totalCount", 0);
+        }
+
+        // 3. 内容哈希去重逻辑
+        Map<String, String> contentMap = new LinkedHashMap<>(); // content -> firstEncounteredId
+        List<String> idsToDelete = new ArrayList<>();
+        int totalScan = ids.size();
+
+        for (int i = 0; i < totalScan; i++) {
+            String id = ids.get(i);
+            String content = documents.get(i);
+            
+            if (contentMap.containsKey(content)) {
+                // 重复出现，记录 ID 准备删除
+                idsToDelete.add(id);
+            } else {
+                // 第一次出现，保留
+                contentMap.put(content, id);
+            }
+        }
+
+        // 4. 执行物理删除
+        int deleteApiStatus = 0;
+        if (!idsToDelete.isEmpty()) {
+            ChromaApi.DeleteEmbeddingsRequest deleteRequest = new ChromaApi.DeleteEmbeddingsRequest(idsToDelete);
+            deleteApiStatus = chromaApi.deleteEmbeddings(tenant, database, collection.id(), deleteRequest);
+        }
+
+        // 5. 生成报告
+        Map<String, Object> report = new LinkedHashMap<>();
+        report.put("collection", collectionName);
+        report.put("totalScan", totalScan);
+        report.put("uniqueCount", contentMap.size());
+        report.put("duplicateCount", idsToDelete.size());
+        report.put("deleteApiStatus", deleteApiStatus);
+        report.put("message", idsToDelete.isEmpty() ? "No duplicates found." : "Cleanup completed successfully.");
+        return report;
     }
 
 }

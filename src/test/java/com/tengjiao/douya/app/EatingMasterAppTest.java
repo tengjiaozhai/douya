@@ -36,12 +36,13 @@ class EatingMasterAppTest {
 
     @Test
     void testMcp() throws GraphRunnerException {
+
         ReactAgent agent = ReactAgent.builder()
             .name("my_agent")
             .model(eatingMasterModel)
-            .toolCallbackProviders(toolCallbackProvider)
+            .tools(toolCallbackProvider.getToolCallbacks())
             .build();
-        AssistantMessage assistantMessage = agent.call("调用股票mcp工具 查询最近讨论的最火热的是那一只股票");
+        AssistantMessage assistantMessage = agent.call("搜索西雅图的酒店");
         System.out.println(assistantMessage.getText());
     }
 }

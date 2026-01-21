@@ -32,4 +32,33 @@ public interface OssService {
      * @return true if exists, false otherwise.
      */
     boolean doesObjectExist(String objectName);
+
+    /**
+     * Deletes an object from OSS.
+     *
+     * @param objectName The name of the object to delete.
+     */
+    void deleteObject(String objectName);
+
+    /**
+     * Lists objects in the bucket with a specific prefix.
+     *
+     * @param prefix The prefix to filter objects.
+     * @return A list of object keys.
+     */
+    java.util.List<String> listObjects(String prefix);
+
+    /**
+     * Copies an object within the same bucket.
+     *
+     * @param sourceKey      The source object key.
+     * @param destinationKey The destination object key.
+     */
+    void copyObject(String sourceKey, String destinationKey);
+
+    /**
+     * Gets the bucket name.
+     * @return The bucket name.
+     */
+    String getBucketName();
 }

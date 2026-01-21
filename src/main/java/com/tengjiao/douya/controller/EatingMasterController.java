@@ -3,16 +3,17 @@ package com.tengjiao.douya.controller;
 import com.tengjiao.douya.app.EatingMasterApp;
 import com.tengjiao.douya.app.UserVectorApp;
 import com.tengjiao.douya.config.ChromaProperties;
+import com.tengjiao.douya.model.PdfProcessResult;
+import com.tengjiao.douya.service.PdfDocumentService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -22,6 +23,7 @@ import java.util.Map;
  * @author tengjiao
  * @since 2025-12-05
  */
+@Slf4j
 @RestController
 @RequestMapping("/douya/eating")
 @Tag(name = "吃饭大师接口")
@@ -31,11 +33,35 @@ public class EatingMasterController {
     private final EatingMasterApp eatingMasterApp;
     private final UserVectorApp userVectorApp;
     private final ChromaProperties chromaProperties;
+    private final PdfDocumentService pdfDocumentService;
 
     @GetMapping("/ask")
     @Operation(summary = "询问美食问题")
     public String ask(@RequestParam String question) {
         return eatingMasterApp.ask(question);
+    }
+
+    @PostMapping("/pdf/upload")
+    @Operation(summary = "上传并处理 PDF 文档(同步)")
+    public PdfProcessResult uploadPdf(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "documentName", required = false) String documentName) {
+        
+        String fileName = (documentName != null && !documentName.isEmpty()) 
+                ? documentName : file.getOriginalFilename();
+        
+        log.info("接收到 PDF 上传请求: {}, 大小: {} bytes", fileName, file.getSize());
+
+        try {
+            return pdfDocumentService.processPdfDocument(file.getInputStream(), fileName);
+        } catch (IOException e) {
+            log.error("读取上传文件失败: {}", e.getMessage(), e);
+            return PdfProcessResult.builder()
+                    .documentName(fileName)
+                    .status("FAILED")
+                    .errorMessage("文件读取失败: " + e.getMessage())
+                    .build();
+        }
     }
 
     @GetMapping("/documents")
@@ -69,6 +95,49 @@ public class EatingMasterController {
             error.put("error", e.getMessage());
             error.put("collectionName", collectionName);
             error.put("stackTrace", e.getClass().getName());
+            return error;
+        }
+    }
+
+    @GetMapping("/vector/status")
+    @Operation(summary = "查看向量库状态：统计转换后的向量内容及数量")
+    public Map<String, Object> getVectorStatus(
+            @RequestParam(required = false, defaultValue = "100") Integer limit,
+            @RequestParam(required = false) String userId) {
+
+        // 复用获取逻辑，但以更直观的“状态查看”形式呈现
+        Map<String, Object> result = getAllDocuments(limit, userId);
+        result.put("description", "窥探已向量化的数据片段及元数据信息");
+        result.put("tip", "如果 userId 为空，则查询全局（包含系统导入的文档）");
+        return result;
+    }
+
+    @GetMapping("/vector/collection/raw")
+    @Operation(summary = "获取 Collection 的原始向量内容（参考 Chroma get 接口）")
+    public Map<String, Object> getCollectionRaw(
+            @RequestParam(required = false, defaultValue = "100") Integer limit) {
+
+        String collectionName = chromaProperties.getCollectionName();
+        try {
+            return userVectorApp.getChromaRawData(collectionName, limit);
+        } catch (Exception e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            error.put("collectionName", collectionName);
+            return error;
+        }
+    }
+
+    @PostMapping("/vector/clean")
+    @Operation(summary = "手动触发向量库去重清洗")
+    public Map<String, Object> cleanVectors() {
+        String collectionName = chromaProperties.getCollectionName();
+        try {
+            return userVectorApp.cleanupDuplicates(collectionName);
+        } catch (Exception e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            error.put("status", "FAILED");
             return error;
         }
     }

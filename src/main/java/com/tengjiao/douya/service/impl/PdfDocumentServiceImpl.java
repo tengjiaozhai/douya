@@ -7,6 +7,7 @@ import com.tengjiao.douya.service.PdfDocumentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
@@ -39,9 +40,11 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
     private final OssService ossService;
     private final VectorStore chromaVectorStore;
 
-    // 文本切分器配置
-    private static final int DEFAULT_CHUNK_SIZE = 800;
-    private static final int DEFAULT_OVERLAP = 200;
+    // 文本切分器配置 - Parent-Child 策略
+    private static final int PARENT_CHUNK_SIZE = 1200;
+    private static final int PARENT_CHUNK_OVERLAP = 200;
+    private static final int CHILD_CHUNK_SIZE = 200;
+    private static final int CHILD_CHUNK_OVERLAP = 50;
 
     // 图片格式
     private static final String IMAGE_FORMAT = "png";
@@ -85,10 +88,13 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             log.info("提取并上传了 {} 张图片", allImages.size());
 
             // 3. 解析文本内容(按页)
-            List<PageContent> pageContents = extractTextByPage(pdDocument);
+            List<PageContent> rawPageContents = extractTextByPage(pdDocument);
 
-            // 4. 切分文本并关联图片
-            List<Document> documents = splitAndAssociateImages(
+            // 4. 数据清洗：剔除页眉页脚、乱码等
+            List<PageContent> pageContents = cleanPageContents(rawPageContents);
+
+            // 5. 切分文本(Parent-Child 策略)并关联图片
+            List<Document> documents = splitParentChildAndAssociate(
                     pageContents,
                     allImages,
                     documentName);
@@ -126,13 +132,17 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
      */
     private List<PdfImageInfo> extractAndUploadImages(PDDocument document, String documentName) {
         List<PdfImageInfo> imageInfos = new ArrayList<>();
+        // 用于存储已上传图片的 COSStream 及其对应的 OSS URL 和文件名，避免重复上传
+        Map<COSStream, String> uploadedUrls = new HashMap<>();
+        Map<COSStream, String> uploadedFileNames = new HashMap<>();
 
         try {
             int pageNum = 0;
+            int totalUniqueImages = 0;
+
             for (PDPage page : document.getPages()) {
                 pageNum++;
-                int imageIndex = 0;
-
+                
                 // 获取页面资源
                 if (page.getResources() == null) {
                     continue;
@@ -143,9 +153,20 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
                     var xObject = page.getResources().getXObject(name);
 
                     if (xObject instanceof PDImageXObject imageXObject) {
-                        imageIndex++;
+                        COSStream cosStream = imageXObject.getCOSObject();
+                        
+                        String ossUrl;
+                        String fileName;
 
-                        try {
+                        // 检查是否已经上传过此图片
+                        if (uploadedUrls.containsKey(cosStream)) {
+                            ossUrl = uploadedUrls.get(cosStream);
+                            fileName = uploadedFileNames.get(cosStream);
+                            log.debug("检测到重复图片，复用 OSS 地址: page={}, name={}, url={}", pageNum, name, ossUrl);
+                        } else {
+                            // 未上传过，执行上传逻辑
+                            totalUniqueImages++;
+                            
                             // 转换为 BufferedImage
                             BufferedImage bufferedImage = imageXObject.getImage();
 
@@ -154,12 +175,11 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
                             ImageIO.write(bufferedImage, IMAGE_FORMAT, baos);
                             byte[] imageBytes = baos.toByteArray();
 
-                            // 生成 OSS 对象名
-                            String fileName = String.format(
-                                    "%s_page%d_img%d.%s",
+                            // 生成 OSS 对象名 (使用全局唯一序号)
+                            fileName = String.format(
+                                    "%s_img%d.%s",
                                     sanitizeFileName(documentName),
-                                    pageNum,
-                                    imageIndex,
+                                    totalUniqueImages,
                                     IMAGE_FORMAT);
 
                             String objectName = String.format(
@@ -168,25 +188,27 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
                                     fileName);
 
                             // 上传到 OSS
-                            String ossUrl = ossService.uploadFile(
+                            ossUrl = ossService.uploadFile(
                                     objectName,
                                     new ByteArrayInputStream(imageBytes));
 
-                            // 记录图片信息
-                            PdfImageInfo imageInfo = PdfImageInfo.builder()
-                                    .fileName(fileName)
-                                    .ossUrl(ossUrl)
-                                    .pageNumber(pageNum)
-                                    .yPosition(0f) // PDFBox 3.x 需要通过其他方式获取位置
-                                    .format(IMAGE_FORMAT)
-                                    .build();
-
-                            imageInfos.add(imageInfo);
-                            log.debug("上传图片: {} -> {}", fileName, ossUrl);
-
-                        } catch (Exception e) {
-                            log.warn("提取图片失败: page={}, index={}", pageNum, imageIndex, e);
+                            // 加入缓存
+                            uploadedUrls.put(cosStream, ossUrl);
+                            uploadedFileNames.put(cosStream, fileName);
+                            
+                            log.debug("上传新图片: {} -> {}", fileName, ossUrl);
                         }
+
+                        // 记录图片信息 (注意：即便 URL 相同，也要记录它出现在哪一页)
+                        PdfImageInfo imageInfo = PdfImageInfo.builder()
+                                .fileName(fileName)
+                                .ossUrl(ossUrl)
+                                .pageNumber(pageNum)
+                                .yPosition(0f)
+                                .format(IMAGE_FORMAT)
+                                .build();
+
+                        imageInfos.add(imageInfo);
                     }
                 }
             }
@@ -216,66 +238,117 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
     }
 
     /**
-     * 切分文本并智能关联图片
+     * 数据清洗：识别页眉页脚并剔除乱码
      */
-    private List<Document> splitAndAssociateImages(
+    private List<PageContent> cleanPageContents(List<PageContent> pageContents) {
+        if (pageContents.isEmpty()) return pageContents;
+
+        // 1. 简单的页眉页脚识别：统计首尾行出现频率
+        Map<String, Integer> headerFooterCounts = new HashMap<>();
+        for (PageContent pc : pageContents) {
+            String[] lines = pc.text().split("\\r?\\n");
+            if (lines.length > 0) {
+                String firstLine = lines[0].trim();
+                if (!firstLine.isEmpty()) headerFooterCounts.merge(firstLine, 1, (a, b) -> a + b);
+                
+                String lastLine = lines[lines.length - 1].trim();
+                if (!lastLine.isEmpty()) headerFooterCounts.merge(lastLine, 1, (a, b) -> a + b);
+            }
+        }
+
+        // 认为出现次数超过总页数一半的行是页眉页脚
+        Set<String> noiseLines = headerFooterCounts.entrySet().stream()
+                .filter(e -> e.getValue() > pageContents.size() * 0.5)
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toSet());
+
+        return pageContents.stream().map(pc -> {
+            String text = pc.text();
+            for (String noise : noiseLines) {
+                text = text.replace(noise, "");
+            }
+            
+            // 2. 正则清洗乱码、控制字符等
+            // 移除 ASCII 控制字符
+            text = text.replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]", "");
+            // 移除连续的空白字符
+            text = text.replaceAll("\\s{2,}", " ");
+            
+            return new PageContent(pc.pageNumber(), text.trim());
+        }).collect(Collectors.toList());
+    }
+
+    /**
+     * 采用 Parent-Child (小到大) 检索策略切分文本并管理图片
+     */
+    private List<Document> splitParentChildAndAssociate(
             List<PageContent> pageContents,
             List<PdfImageInfo> allImages,
             String documentName) {
 
-        List<Document> documents = new ArrayList<>();
-        TokenTextSplitter splitter = new TokenTextSplitter(DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP, 5, 1000, true);
+        List<Document> childDocuments = new ArrayList<>();
+        TokenTextSplitter parentSplitter = new TokenTextSplitter(PARENT_CHUNK_SIZE, PARENT_CHUNK_OVERLAP, 5, 1000, true);
+        TokenTextSplitter childSplitter = new TokenTextSplitter(CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, 5, 1000, true);
 
-        int globalChunkIndex = 0;
+        int globalChildIndex = 0;
+
+        // 预分组图片，提高检索效率
+        Map<Integer, List<PdfImageInfo>> imagesByPage = allImages.stream()
+                .collect(Collectors.groupingBy(PdfImageInfo::getPageNumber));
 
         for (PageContent pageContent : pageContents) {
             int pageNumber = pageContent.pageNumber();
             String pageText = pageContent.text();
+            
+            if (pageText.isEmpty()) continue;
 
             // 获取该页的所有图片
-            List<PdfImageInfo> pageImages = allImages.stream()
-                    .filter(img -> img.getPageNumber().equals(pageNumber))
+            List<PdfImageInfo> pageImages = imagesByPage.getOrDefault(pageNumber, Collections.emptyList());
+            
+            List<Map<String, Object>> imageMetadataList = pageImages.stream()
+                    .map(img -> Map.of(
+                            "fileName", (Object) img.getFileName(),
+                            "ossUrl", img.getOssUrl(),
+                            "position", "page" + img.getPageNumber()))
                     .collect(Collectors.toList());
 
-            // 切分页面文本
-            List<Document> pageChunks = splitter.apply(
-                    List.of(new Document(pageText)));
+            // 1. 先切分为 Parent 块
+            List<Document> parents = parentSplitter.apply(List.of(new Document(pageText)));
 
-            // 为每个片段添加元数据和关联图片
-            for (int i = 0; i < pageChunks.size(); i++) {
-                Document chunk = pageChunks.get(i);
-                globalChunkIndex++;
+            for (Document parentChunk : parents) {
+                // 2. 在 Parent 内部切分为更精确的 Child 块
+                List<Document> children = childSplitter.apply(List.of(parentChunk));
 
-                Map<String, Object> metadata = new HashMap<>(chunk.getMetadata());
-                metadata.put("documentName", documentName);
-                metadata.put("pageNumber", pageNumber);
-                metadata.put("chunkIndex", globalChunkIndex);
-                metadata.put("timestamp", Instant.now().toString());
+                for (Document childChunk : children) {
+                    globalChildIndex++;
+                    
+                    Map<String, Object> metadata = new HashMap<>(childChunk.getMetadata());
+                    metadata.put("documentName", documentName);
+                    metadata.put("pageNumber", pageNumber);
+                    metadata.put("childIndex", globalChildIndex);
+                    metadata.put("timestamp", Instant.now().toString());
+                    
+                    // 核心逻辑：关联父块文本
+                    metadata.put("parent_text", parentChunk.getText());
+                    metadata.put("is_child", true);
 
-                // 智能关联图片:将该页的图片关联到该页的片段
-                // 方案B: 只关联该页的图片到该页的片段
-                if (!pageImages.isEmpty()) {
-                    List<Map<String, Object>> imageMetadata = pageImages.stream()
-                            .map(img -> Map.of(
-                                    "fileName", (Object) img.getFileName(),
-                                    "ossUrl", img.getOssUrl(),
-                                    "position", "page" + img.getPageNumber()))
-                            .collect(Collectors.toList());
+                    // 关联该页图片
+                    if (!imageMetadataList.isEmpty()) {
+                        metadata.put("images", imageMetadataList);
+                    }
 
-                    metadata.put("images", imageMetadata);
+                    Document enrichedChild = Document.builder()
+                            .id(UUID.randomUUID().toString())
+                            .text(childChunk.getText())
+                            .metadata(metadata)
+                            .build();
+
+                    childDocuments.add(enrichedChild);
                 }
-
-                Document enrichedDoc = Document.builder()
-                        .id(UUID.randomUUID().toString())
-                        .text(chunk.getText())
-                        .metadata(metadata)
-                        .build();
-
-                documents.add(enrichedDoc);
             }
         }
 
-        return documents;
+        return childDocuments;
     }
 
     /**
