@@ -192,16 +192,18 @@ public class EatingMasterApp {
     private final Store douyaDatabaseStore;
     private final UserVectorApp userVectorApp;
     private final ChatModel readUnderstandModel;
+    private final ChatModel douBaoTransitDeepseek;
 
     private final Store memoryStore = new MemoryStore();
 
     public EatingMasterApp(ChatModel eatingMasterModel, ChatModel summaryChatModel, Store douyaDatabaseStore,
-            UserVectorApp userVectorApp, ChatModel readUnderstandModel) {
+                           UserVectorApp userVectorApp, ChatModel readUnderstandModel, ChatModel douBaoTransitDeepseek) {
         this.eatingMasterModel = eatingMasterModel;
         this.summaryChatModel = summaryChatModel;
         this.douyaDatabaseStore = douyaDatabaseStore;
         this.userVectorApp = userVectorApp;
         this.readUnderstandModel = readUnderstandModel;
+        this.douBaoTransitDeepseek = douBaoTransitDeepseek;
     }
 
     /**
@@ -209,9 +211,9 @@ public class EatingMasterApp {
      */
     private String process(UserMessage userMessage, String userId) {
         // 1. 初始化子智能体
-        PreferenceLearningHook preferenceLearningHook = new PreferenceLearningHook(summaryChatModel,
+        PreferenceLearningHook preferenceLearningHook = new PreferenceLearningHook(douBaoTransitDeepseek,
                 douyaDatabaseStore);
-        CombinedMemoryHook combinedMemoryHook = new CombinedMemoryHook(douyaDatabaseStore, summaryChatModel,
+        CombinedMemoryHook combinedMemoryHook = new CombinedMemoryHook(douyaDatabaseStore, douBaoTransitDeepseek,
                 userVectorApp, 10, 10);
         // 移除 RAGMessagesHook，改为工具模式
         // RAGMessagesHook ragMessagesHook = new RAGMessagesHook(userVectorApp);
@@ -277,7 +279,7 @@ public class EatingMasterApp {
 
         // 3. 构建核心监督者 Graph (Custom Implementation)
         EatingMasterGraph eatingMasterGraph = new EatingMasterGraph(
-                summaryChatModel,
+                douBaoTransitDeepseek,
                 eatingMasterAgent,
                 visionAgent,
                 dailyAgent,

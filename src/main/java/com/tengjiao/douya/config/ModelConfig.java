@@ -66,6 +66,25 @@ public class ModelConfig {
             .build();
     }
 
+    @Bean
+    public ChatModel douBaoTransitDeepseek() {
+        OpenAiApi openAiApi = OpenAiApi.builder()
+                .baseUrl("https://ark.cn-beijing.volces.com/api/v3")
+                .completionsPath("/chat/completions")
+                .apiKey(douBaoApiKey)
+                .build();
+        OpenAiChatOptions openAiChatOptions = OpenAiChatOptions.builder()
+                .model("ep-m-20260125171935-vd6wp")
+                .maxTokens(2000)
+                .temperature(0.5)
+                .topP(0.9)
+                .build();
+        return OpenAiChatModel.builder()
+                .openAiApi(openAiApi)
+                .defaultOptions(openAiChatOptions)
+                .build();
+    }
+
     // 全模态模型
     @Bean
     public ChatModel readUnderstandModel() {
