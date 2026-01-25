@@ -331,12 +331,19 @@ douya
 
 ## 更新日志
 
+### 2026-01-25
+
+- **修复 DashScope 嵌入批量大小限制**: 修复了由于阿里云 DashScope 嵌入模型单次请求限制调整为 10 条导致的 HTTP 400 错误。在 `PdfDocumentServiceImpl` 中将向量化的 `batchSize` 从 25 下调至 10，确保在高吞吐量下的连接稳定性。
+- **新增公共文档搜索工具 (PublicDocumentSearchTool)**: 为了支持 Agentic RAG 检索系统级知识（如公共 PDF 手册），在 `infra.tool` 下实现了该工具。它能够自动过滤用户私有数据，并返回包含文件名、页码、正文及图片 OSS 链接的深度格式化数据，使 Agent 具备引用来源和展示图片的能力。
+
 ### 2026-01-21
 
-- **PDF 图片提取去重优化**: 修复了 PDF 处理中重复提取和上传相同图片的问题，显著降低 OSS 存储成本。
+- **PDF 图片提取去重与并行化优化**:
   - **对象级去重**: 通过识别图片的 `COSStream` 标识符，确保同一张图片在 PDF 多页中复用时仅执行一次 OSS 上传。
+  - **并行处理升级**: 使用 `CompletableFuture` 改造图片提取流程。在主线程顺序提取 `BufferedImage` 以保证 PDFBox 的线程安全，同时并发执行 PNG 编码与 OSS 上传，显著提升了大文档处理速度。
   - **检索性能提升**: 在文本切分阶段引入图片预分组（Grouping）机制，将图片与文本片段关联的效率从 O(N^2) 优化为 O(N)。
   - **全局命名规范**: 采用全局统一样式的图片命名规则，避免多页重复上传导致的命名冲突。
+- **DashScope 嵌入限制修复**: 修复了由于阿里云 DashScope 嵌入模型单次文本数量不得超过 25 条导致的 `IllegalArgumentException`。在 `PdfDocumentServiceImpl` 与 `UserVectorApp` 中引入了分批提交机制（Batching），确保大文档切分后的向量化过程稳定可靠。
 - **PDF 切分策略升级 (Parent-Child)**: 实现了“清洗先行”与“小到大” (Small-to-Big) 检索策略。
   - **预清洗机制**: 自动识别并剔除跨页重复的页眉页脚，过滤 ASCII 乱码。
   - **双层切分**: 采用 Child (200 tokens) 进行向量索引，Parent (1200 tokens) 提供上下文。

@@ -58,12 +58,13 @@ public class FeishuConfig {
     private FeishuService feishuService;
 
     // 消息去重缓存：保存最近 1000 条消息 ID，防止飞书重试导致重复思考
-    private final Map<String, Boolean> messageIdCache = Collections.synchronizedMap(new LinkedHashMap<String, Boolean>(1001, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
-            return size() > 1000;
-        }
-    });
+    private final Map<String, Boolean> messageIdCache = Collections
+            .synchronizedMap(new LinkedHashMap<String, Boolean>(1001, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                    return size() > 1000;
+                }
+            });
 
     /**
      * 创建飞书 WebSocket 客户端
@@ -95,68 +96,169 @@ public class FeishuConfig {
 
                                 log.info("[Feishu] 开始异步处理私聊消息: {}", messageId);
 
-                                switch (messageType){
+                                switch (messageType) {
                                     case "text" -> {
-                                        FeishuTextContent feishuTextContent = Jsons.DEFAULT.fromJson(content, FeishuTextContent.class);
+                                        FeishuTextContent feishuTextContent = Jsons.DEFAULT.fromJson(content,
+                                                FeishuTextContent.class);
                                         String userQuery = feishuTextContent.getText();
 
                                         // 检查是否有待处理的图片
                                         String pendingImagePath = eatingMasterApp.getPendingImage(userId);
                                         if (pendingImagePath != null && !pendingImagePath.isEmpty()) {
                                             log.info("[Feishu] 发现用户 {} 有待处理图片，开始结合处理", userId);
-                                            
+
                                             // 1. 立即回复“正在分析”
                                             feishuTextContent.setText("收到！正在结合你刚才发的图片进行深度分析...");
-                                            feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+                                            feishuService.sendMessage("user_id",
+                                                    new FeishuMessageSendRequest(userId, messageType,
+                                                            Jsons.DEFAULT.toJson(feishuTextContent),
+                                                            UUID.randomUUID().toString()));
 
                                             // 2. 调用视觉分析 + 专家对话
-                                            String visionInfo = eatingMasterApp.visionAnalyze(pendingImagePath, userQuery, userId);
+                                            String visionInfo = eatingMasterApp.visionAnalyze(pendingImagePath,
+                                                    userQuery, userId);
                                             String aiResponse = eatingMasterApp.ask(visionInfo, userId);
 
                                             // 3. 发送最终结果并清除状态
                                             feishuTextContent.setText(aiResponse);
-                                            feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+                                            feishuService.sendMessage("user_id",
+                                                    new FeishuMessageSendRequest(userId, messageType,
+                                                            Jsons.DEFAULT.toJson(feishuTextContent),
+                                                            UUID.randomUUID().toString()));
                                             eatingMasterApp.clearPendingImage(userId);
                                         } else {
                                             // 正常聊天流程
                                             // 1. 立即回复“正在思考”
                                             feishuTextContent.setText("稍等哦，本大师正在思考...");
-                                            feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+                                            feishuService.sendMessage("user_id",
+                                                    new FeishuMessageSendRequest(userId, messageType,
+                                                            Jsons.DEFAULT.toJson(feishuTextContent),
+                                                            UUID.randomUUID().toString()));
 
                                             // 2. 调用大模型（耗时操作）
                                             String aiResponse = eatingMasterApp.ask(userQuery, userId);
 
-                                            // 3. 发送最终结果
-                                            feishuTextContent.setText(aiResponse);
-                                            feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, messageType, Jsons.DEFAULT.toJson(feishuTextContent), UUID.randomUUID().toString()));
+                                            // 3. 解析回复内容，检查是否包含 Markdown 图片
+                                            java.util.regex.Pattern imgPattern = java.util.regex.Pattern
+                                                    .compile("!\\[(.*?)\\]\\((.*?)\\)");
+                                            java.util.regex.Matcher matcher = imgPattern.matcher(aiResponse);
+
+                                            if (matcher.find()) {
+                                                log.info("[Feishu] 检测到回复中包含图片，正在构建富文本消息...");
+                                                // 重置 matcher
+                                                matcher.reset();
+
+                                                com.tengjiao.douya.entity.feishu.content.FeishuPostContent postContent = new com.tengjiao.douya.entity.feishu.content.FeishuPostContent();
+                                                postContent.setTitle("");
+
+                                                java.util.List<com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement> elements = new java.util.ArrayList<>();
+                                                int lastIndex = 0;
+
+                                                while (matcher.find()) {
+                                                    // 添加前面的文本
+                                                    String preText = aiResponse.substring(lastIndex, matcher.start());
+                                                    if (!preText.isEmpty()) {
+                                                        com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement textElem = new com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement();
+                                                        textElem.setTag("text");
+                                                        textElem.setText(preText);
+                                                        elements.add(textElem);
+                                                    }
+
+                                                    // 处理图片
+                                                    String imgUrl = matcher.group(2);
+                                                    try {
+                                                        // 下载图片到临时文件
+                                                        String suffix = imgUrl.toLowerCase().endsWith(".png") ? ".png"
+                                                                : ".jpg";
+                                                        java.io.File tempImg = java.io.File
+                                                                .createTempFile("feishu_upload_", suffix);
+                                                        java.io.InputStream in = java.net.URI.create(imgUrl).toURL()
+                                                                .openStream();
+                                                        java.nio.file.Files.copy(in, tempImg.toPath(),
+                                                                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                                                        in.close();
+
+                                                        // 上传到飞书
+                                                        String imageKey = feishuService.uploadImage(tempImg);
+
+                                                        // 添加图片元素
+                                                        com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement imgElem = new com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement();
+                                                        imgElem.setTag("img");
+                                                        imgElem.setImageKey(imageKey);
+                                                        elements.add(imgElem);
+
+                                                        // 删除临时文件
+                                                        tempImg.delete();
+                                                    } catch (Exception e) {
+                                                        log.error("[Feishu] 图片处理失败: {}", imgUrl, e);
+                                                        // 降级为链接文本
+                                                        com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement linkElem = new com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement();
+                                                        linkElem.setTag("a");
+                                                        linkElem.setText("[图片链接]");
+                                                        linkElem.setHref(imgUrl);
+                                                        elements.add(linkElem);
+                                                    }
+
+                                                    lastIndex = matcher.end();
+                                                }
+
+                                                // 添加剩余文本
+                                                String tailText = aiResponse.substring(lastIndex);
+                                                if (!tailText.isEmpty()) {
+                                                    com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement textElem = new com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement();
+                                                    textElem.setTag("text");
+                                                    textElem.setText(tailText);
+                                                    elements.add(textElem);
+                                                }
+
+                                                postContent.setContent(java.util.Collections.singletonList(elements));
+
+                                                // 封装为发送格式 {"zh_cn": ...}
+                                                com.tengjiao.douya.entity.feishu.content.FeishuPostMessageContent sendContent = new com.tengjiao.douya.entity.feishu.content.FeishuPostMessageContent();
+                                                sendContent.setZhCn(postContent);
+
+                                                feishuService.sendMessage("user_id",
+                                                        new FeishuMessageSendRequest(userId, "post",
+                                                                Jsons.DEFAULT.toJson(sendContent),
+                                                                UUID.randomUUID().toString()));
+
+                                            } else {
+                                                // 纯文本消息
+                                                feishuTextContent.setText(aiResponse);
+                                                feishuService.sendMessage("user_id",
+                                                        new FeishuMessageSendRequest(userId, messageType,
+                                                                Jsons.DEFAULT.toJson(feishuTextContent),
+                                                                UUID.randomUUID().toString()));
+                                            }
                                         }
                                     }
                                     case "image" -> {
-                                        FeishuImageContent feishuImageContent = Jsons.DEFAULT.fromJson(content, FeishuImageContent.class);
-                                        
+                                        FeishuImageContent feishuImageContent = Jsons.DEFAULT.fromJson(content,
+                                                FeishuImageContent.class);
+
                                         // 获取项目根目录下的 src/main/resources/temp
                                         ApplicationHome home = new ApplicationHome(getClass());
-                                        File sourceDir = home.getSource(); 
-                                        String tempPath = sourceDir.getParentFile().getParentFile().getAbsolutePath() 
-                                                + File.separator + "src" + File.separator + "main" + File.separator + "resources" + File.separator + "temp";
-                                        
+                                        File sourceDir = home.getSource();
+                                        String tempPath = sourceDir.getParentFile().getParentFile().getAbsolutePath()
+                                                + File.separator + "src" + File.separator + "main" + File.separator
+                                                + "resources" + File.separator + "temp";
+
                                         File tempDir = new File(tempPath);
                                         if (!tempDir.exists()) {
                                             tempDir.mkdirs();
                                         }
-                                        
+
                                         String fileName = feishuImageContent.getImageKey() + ".png";
                                         String fullPath = tempPath + File.separator + fileName;
-                                        
+
                                         log.info("[Feishu] 开始下载图片资源到: {}", fullPath);
                                         FeiShuGetMessageResourceUtils.getMessageResource(
-                                            feishuProperties.getAppId(), 
-                                            feishuProperties.getAppSecret(),
-                                            messageId, 
-                                            feishuImageContent.getImageKey(), 
-                                            messageType, 
-                                            fullPath
-                                        );
+                                                feishuProperties.getAppId(),
+                                                feishuProperties.getAppSecret(),
+                                                messageId,
+                                                feishuImageContent.getImageKey(),
+                                                messageType,
+                                                fullPath);
                                         log.info("[Feishu] 图片资源下载完成: {}", fullPath);
 
                                         // 暂存图片路径，不立即分析
@@ -166,7 +268,10 @@ public class FeishuConfig {
                                         FeishuTextContent responseContent = new FeishuTextContent();
                                         String welcomeBack = "收到图片啦！📸\n你想让我针对这张图帮你做点什么？（比如分析它的内容、识别文字，或者告诉我你此刻的想法）";
                                         responseContent.setText(welcomeBack);
-                                        feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, "text", Jsons.DEFAULT.toJson(responseContent), UUID.randomUUID().toString()));
+                                        feishuService.sendMessage("user_id",
+                                                new FeishuMessageSendRequest(userId, "text",
+                                                        Jsons.DEFAULT.toJson(responseContent),
+                                                        UUID.randomUUID().toString()));
                                     }
                                 }
                             } catch (Exception e) {
@@ -178,7 +283,8 @@ public class FeishuConfig {
                 .onCustomizedEvent("out_approval", new CustomEventHandler() {
                     @Override
                     public void handle(EventReq event) throws Exception {
-                        log.info("[Feishu] 收到自定义事件 [out_approval]: {}", new String(event.getBody(), StandardCharsets.UTF_8));
+                        log.info("[Feishu] 收到自定义事件 [out_approval]: {}",
+                                new String(event.getBody(), StandardCharsets.UTF_8));
                     }
                 })
                 // 监听「卡片回传交互 card.action.trigger」
@@ -218,7 +324,8 @@ public class FeishuConfig {
                                 String welcomeMsg = eatingMasterApp.welcome(userId);
                                 FeishuTextContent content = new FeishuTextContent();
                                 content.setText(welcomeMsg);
-                                feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, "text", Jsons.DEFAULT.toJson(content), UUID.randomUUID().toString()));
+                                feishuService.sendMessage("user_id", new FeishuMessageSendRequest(userId, "text",
+                                        Jsons.DEFAULT.toJson(content), UUID.randomUUID().toString()));
                             } catch (Exception e) {
                                 log.error("[Feishu] 发送欢迎语异常", e);
                             }

@@ -33,4 +33,12 @@ public interface FeishuService {
      * @return 响应结果
      */
     FeishuMessageSendResponse sendMessage(String receiveIdType, FeishuMessageSendRequest request);
+
+    /**
+     * 上传图片
+     *
+     * @param imageFile 图片文件
+     * @return 图片 key (image_key)
+     */
+    String uploadImage(java.io.File imageFile);
 }

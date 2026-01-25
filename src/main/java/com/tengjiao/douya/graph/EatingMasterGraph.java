@@ -1,11 +1,6 @@
 package com.tengjiao.douya.graph;
 
-import com.alibaba.cloud.ai.graph.CompiledGraph;
-import com.alibaba.cloud.ai.graph.KeyStrategy;
-import com.alibaba.cloud.ai.graph.KeyStrategyFactory;
-import com.alibaba.cloud.ai.graph.OverAllState;
-import com.alibaba.cloud.ai.graph.RunnableConfig;
-import com.alibaba.cloud.ai.graph.StateGraph;
+import com.alibaba.cloud.ai.graph.*;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.state.strategy.AppendStrategy;
@@ -28,7 +23,7 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
 @Slf4j
 public class EatingMasterGraph {
 
-    private final ChatModel supervisorModel;
+    private final ChatModel summaryChatModel;
     private final ReactAgent eatingMasterAgent;
     private final ReactAgent visionAgent;
     private final ReactAgent dailyAgent; // 新增
@@ -36,14 +31,14 @@ public class EatingMasterGraph {
     private final String supervisorInstruction;
     private final RunnableConfig config;
 
-    public EatingMasterGraph(ChatModel supervisorModel,
+    public EatingMasterGraph(ChatModel summaryChatModel,
                              ReactAgent eatingMasterAgent,
                              ReactAgent visionAgent,
                              ReactAgent dailyAgent, // 新参数
                              String supervisorSystemPrompt,
                              String supervisorInstruction,
                              RunnableConfig config) {
-        this.supervisorModel = supervisorModel;
+        this.summaryChatModel = summaryChatModel;
         this.eatingMasterAgent = eatingMasterAgent;
         this.visionAgent = visionAgent;
         this.dailyAgent = dailyAgent;
@@ -69,10 +64,10 @@ public class EatingMasterGraph {
         // 2. 创建节点
         // 2.1 Supervisor Node
         SupervisorNode supervisorNode = new SupervisorNode(
-            supervisorModel,
-            List.of("EatingMaster", "VisionUnderstand", "DailyAssistant"), // 增加新成员
-            supervisorSystemPrompt,
-            supervisorInstruction
+                summaryChatModel,
+                List.of("EatingMaster", "VisionUnderstand", "DailyAssistant"), // 增加新成员
+                supervisorSystemPrompt,
+                supervisorInstruction
         );
 
         // 2.2 Worker Nodes (Wrapped)
@@ -82,47 +77,47 @@ public class EatingMasterGraph {
 
         // 3. 构建 StateGraph
         StateGraph graph = new StateGraph(keyStrategyFactory)
-            .addNode("supervisor", node_async(supervisorNode))
-            .addNode("EatingMaster", node_async(eatingMasterNode))
-            .addNode("VisionUnderstand", node_async(visionNode))
-            .addNode("DailyAssistant", node_async(dailyNode)) // 新增
-            .addEdge(START, "supervisor")
-            // 监督者路由逻辑：决定去哪个 Worker
-            .addConditionalEdges(
-                "supervisor",
-                edge_async(state -> (String) state.value("next").orElse("FINISH")),
-                Map.of(
-                    "EatingMaster", "EatingMaster",
-                    "VisionUnderstand", "VisionUnderstand",
-                    "DailyAssistant", "DailyAssistant", // 新增映射
-                    "FINISH", END
+                .addNode("supervisor", node_async(supervisorNode))
+                .addNode("EatingMaster", node_async(eatingMasterNode))
+                .addNode("VisionUnderstand", node_async(visionNode))
+                .addNode("DailyAssistant", node_async(dailyNode)) // 新增
+                .addEdge(START, "supervisor")
+                // 监督者路由逻辑：决定去哪个 Worker
+                .addConditionalEdges(
+                        "supervisor",
+                        edge_async(state -> (String) state.value("next").orElse("FINISH")),
+                        Map.of(
+                                "EatingMaster", "EatingMaster",
+                                "VisionUnderstand", "VisionUnderstand",
+                                "DailyAssistant", "DailyAssistant", // 新增映射
+                                "FINISH", END
+                        )
                 )
-            )
-            // Worker 后的路由逻辑：如果已决策完成则直达 END，否则回流到 supervisor
-            .addConditionalEdges(
-                "EatingMaster",
-                edge_async(state -> {
-                    String next = (String) state.value("next").orElse("FINISH");
-                    return "FINISH".equalsIgnoreCase(next) ? "FINISH" : "supervisor";
-                }),
-                Map.of("FINISH", END, "supervisor", "supervisor")
-            )
-            .addConditionalEdges(
-                "VisionUnderstand",
-                edge_async(state -> {
-                    String next = (String) state.value("next").orElse("FINISH");
-                    return "FINISH".equalsIgnoreCase(next) ? "FINISH" : "supervisor";
-                }),
-                Map.of("FINISH", END, "supervisor", "supervisor")
-            )
-            .addConditionalEdges( // 新增 DailyAssistant 的回流逻辑
-                "DailyAssistant",
-                edge_async(state -> {
-                    String next = (String) state.value("next").orElse("FINISH");
-                    return "FINISH".equalsIgnoreCase(next) ? "FINISH" : "supervisor";
-                }),
-                Map.of("FINISH", END, "supervisor", "supervisor")
-            );
+                // Worker 后的路由逻辑：如果已决策完成则直达 END，否则回流到 supervisor
+                .addConditionalEdges(
+                        "EatingMaster",
+                        edge_async(state -> {
+                            String next = (String) state.value("next").orElse("FINISH");
+                            return "FINISH".equalsIgnoreCase(next) ? "FINISH" : "supervisor";
+                        }),
+                        Map.of("FINISH", END, "supervisor", "supervisor")
+                )
+                .addConditionalEdges(
+                        "VisionUnderstand",
+                        edge_async(state -> {
+                            String next = (String) state.value("next").orElse("FINISH");
+                            return "FINISH".equalsIgnoreCase(next) ? "FINISH" : "supervisor";
+                        }),
+                        Map.of("FINISH", END, "supervisor", "supervisor")
+                )
+                .addConditionalEdges( // 新增 DailyAssistant 的回流逻辑
+                        "DailyAssistant",
+                        edge_async(state -> {
+                            String next = (String) state.value("next").orElse("FINISH");
+                            return "FINISH".equalsIgnoreCase(next) ? "FINISH" : "supervisor";
+                        }),
+                        Map.of("FINISH", END, "supervisor", "supervisor")
+                );
 
         return graph.compile();
     }
@@ -152,20 +147,20 @@ public class EatingMasterGraph {
             String responseText = "Agent failed to respond.";
             if (result instanceof OverAllState subState) {
                 if (subState.data().containsKey(agentName)) { // outputKey
-                     Object out = subState.data().get(agentName);
-                     if (out instanceof AssistantMessage am) {
-                         responseText = am.getText();
-                     } else {
-                         responseText = out.toString();
-                     }
+                    Object out = subState.data().get(agentName);
+                    if (out instanceof AssistantMessage am) {
+                        responseText = am.getText();
+                    } else {
+                        responseText = out.toString();
+                    }
                 } else {
-                     List<Object> subMsgs = (List<Object>) subState.value("messages").orElse(List.of());
-                     if (!subMsgs.isEmpty()) {
-                         Object last = subMsgs.get(subMsgs.size() - 1);
-                         if (last instanceof AssistantMessage am) {
-                             responseText = am.getText();
-                         }
-                     }
+                    List<Object> subMsgs = (List<Object>) subState.value("messages").orElse(List.of());
+                    if (!subMsgs.isEmpty()) {
+                        Object last = subMsgs.get(subMsgs.size() - 1);
+                        if (last instanceof AssistantMessage am) {
+                            responseText = am.getText();
+                        }
+                    }
                 }
             } else if (result != null) {
                 // 如果结果不是 State，可能是 Map 或其他

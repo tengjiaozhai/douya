@@ -27,6 +27,8 @@ import java.io.InputStream;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -101,8 +103,14 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
 
             log.info("生成了 {} 个文档片段", documents.size());
 
-            // 5. 存储到向量数据库
-            chromaVectorStore.add(documents);
+            // 5. 存储到向量数据库 (分批存储，解决 DashScope 单次请求限制，目前限制为 10 条)
+            int batchSize = 10;
+            for (int i = 0; i < documents.size(); i += batchSize) {
+                int end = Math.min(i + batchSize, documents.size());
+                List<Document> batch = documents.subList(i, end);
+                chromaVectorStore.add(batch);
+                log.info("已存储向量分块: {} - {} / {}", i, end, documents.size());
+            }
             log.info("成功存储到向量数据库");
 
             // 6. 关闭文档
@@ -127,22 +135,26 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
         }
     }
 
-    /**
-     * 提取 PDF 中的图片并上传到 OSS
-     */
     private List<PdfImageInfo> extractAndUploadImages(PDDocument document, String documentName) {
-        List<PdfImageInfo> imageInfos = new ArrayList<>();
-        // 用于存储已上传图片的 COSStream 及其对应的 OSS URL 和文件名，避免重复上传
-        Map<COSStream, String> uploadedUrls = new HashMap<>();
-        Map<COSStream, String> uploadedFileNames = new HashMap<>();
+        // 使用线程安全的列表存储结果
+        List<PdfImageInfo> imageInfos = Collections.synchronizedList(new ArrayList<>());
+
+        // 用于存储正在进行或已完成的上传任务，避免同一张图片重复处理
+        Map<COSStream, CompletableFuture<ImageUploadResult>> uploadTasks = new ConcurrentHashMap<>();
+
+        // 全局唯一图片计数器
+        AtomicInteger uniqueImageCounter = new AtomicInteger(0);
+
+        // 收集所有页面的图片关联任务
+        List<CompletableFuture<Void>> pageImageTasks = new ArrayList<>();
 
         try {
             int pageNum = 0;
-            int totalUniqueImages = 0;
 
             for (PDPage page : document.getPages()) {
                 pageNum++;
-                
+                final int currentPageNum = pageNum;
+
                 // 获取页面资源
                 if (page.getResources() == null) {
                     continue;
@@ -154,73 +166,80 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
 
                     if (xObject instanceof PDImageXObject imageXObject) {
                         COSStream cosStream = imageXObject.getCOSObject();
-                        
-                        String ossUrl;
-                        String fileName;
 
-                        // 检查是否已经上传过此图片
-                        if (uploadedUrls.containsKey(cosStream)) {
-                            ossUrl = uploadedUrls.get(cosStream);
-                            fileName = uploadedFileNames.get(cosStream);
-                            log.debug("检测到重复图片，复用 OSS 地址: page={}, name={}, url={}", pageNum, name, ossUrl);
-                        } else {
-                            // 未上传过，执行上传逻辑
-                            totalUniqueImages++;
-                            
-                            // 转换为 BufferedImage
-                            BufferedImage bufferedImage = imageXObject.getImage();
+                        // 1. 获取 BufferedImage (PDFBox 解析过程建议在主线程顺序执行以确保线程安全)
+                        BufferedImage bufferedImage = imageXObject.getImage();
 
-                            // 转换为 PNG 格式
-                            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                            ImageIO.write(bufferedImage, IMAGE_FORMAT, baos);
-                            byte[] imageBytes = baos.toByteArray();
+                        // 2. 提交并发任务处理编码与上传 (慢速操作并行化)
+                        CompletableFuture<ImageUploadResult> uploadTask = uploadTasks.computeIfAbsent(cosStream,
+                                stream -> {
+                                    return CompletableFuture.supplyAsync(() -> {
+                                        try {
+                                            int imgId = uniqueImageCounter.incrementAndGet();
 
-                            // 生成 OSS 对象名 (使用全局唯一序号)
-                            fileName = String.format(
-                                    "%s_img%d.%s",
-                                    sanitizeFileName(documentName),
-                                    totalUniqueImages,
-                                    IMAGE_FORMAT);
+                                            // 转换为 PNG 格式 (CPU 密集)
+                                            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                            ImageIO.write(bufferedImage, IMAGE_FORMAT, baos);
+                                            byte[] imageBytes = baos.toByteArray();
 
-                            String objectName = String.format(
-                                    "documents/%s/%s",
-                                    sanitizeFileName(documentName),
-                                    fileName);
+                                            // 生成文件名与路径
+                                            String fileName = String.format(
+                                                    "%s_img%d.%s",
+                                                    sanitizeFileName(documentName),
+                                                    imgId,
+                                                    IMAGE_FORMAT);
 
-                            // 上传到 OSS
-                            if (!ossService.doesObjectExist(objectName)){
-                                ossUrl = ossService.uploadFile(
-                                        objectName,
-                                        new ByteArrayInputStream(imageBytes));
-                            }else {
-                                ossUrl = ossService.getFileUrl(objectName);
-                            }
+                                            String objectName = String.format(
+                                                    "documents/%s/%s",
+                                                    sanitizeFileName(documentName),
+                                                    fileName);
 
-                            // 加入缓存
-                            uploadedUrls.put(cosStream, ossUrl);
-                            uploadedFileNames.put(cosStream, fileName);
-                            
-                            log.debug("上传新图片: {} -> {}", fileName, ossUrl);
-                        }
+                                            // 上传到 OSS (I/O 密集)
+                                            String ossUrl;
+                                            if (!ossService.doesObjectExist(objectName)) {
+                                                ossUrl = ossService.uploadFile(
+                                                        objectName,
+                                                        new ByteArrayInputStream(imageBytes));
+                                                log.info("上传新图片: {} -> {}", fileName, ossUrl);
+                                            } else {
+                                                ossUrl = ossService.getFileUrl(objectName);
+                                                log.info("复用 OSS 已有图片: {} -> {}", fileName, ossUrl);
+                                            }
 
-                        // 记录图片信息 (注意：即便 URL 相同，也要记录它出现在哪一页)
-                        PdfImageInfo imageInfo = PdfImageInfo.builder()
-                                .fileName(fileName)
-                                .ossUrl(ossUrl)
-                                .pageNumber(pageNum)
-                                .yPosition(0f)
-                                .format(IMAGE_FORMAT)
-                                .build();
+                                            return new ImageUploadResult(ossUrl, fileName);
+                                        } catch (Exception e) {
+                                            log.error("图片上传任务执行失败", e);
+                                            throw new RuntimeException("图片上传失败", e);
+                                        }
+                                    });
+                                });
 
-                        imageInfos.add(imageInfo);
+                        // 3. 当上传完成后，将记录添加到当前页面的信息列表中
+                        pageImageTasks.add(uploadTask.thenAccept(result -> {
+                            PdfImageInfo imageInfo = PdfImageInfo.builder()
+                                    .fileName(result.fileName())
+                                    .ossUrl(result.ossUrl())
+                                    .pageNumber(currentPageNum)
+                                    .yPosition(0f)
+                                    .format(IMAGE_FORMAT)
+                                    .build();
+                            imageInfos.add(imageInfo);
+                        }));
                     }
                 }
             }
+
+            // 等待所有图片处理完成
+            CompletableFuture.allOf(pageImageTasks.toArray(new CompletableFuture[0])).join();
+
         } catch (Exception e) {
             log.error("提取图片过程出错", e);
         }
 
-        return imageInfos;
+        // 最终结果按照页码排序
+        return imageInfos.stream()
+                .sorted(Comparator.comparingInt(PdfImageInfo::getPageNumber))
+                .collect(Collectors.toList());
     }
 
     /**
@@ -245,7 +264,8 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
      * 数据清洗：识别页眉页脚并剔除乱码
      */
     private List<PageContent> cleanPageContents(List<PageContent> pageContents) {
-        if (pageContents.isEmpty()) return pageContents;
+        if (pageContents.isEmpty())
+            return pageContents;
 
         // 1. 简单的页眉页脚识别：统计首尾行出现频率
         Map<String, Integer> headerFooterCounts = new HashMap<>();
@@ -253,10 +273,12 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             String[] lines = pc.text().split("\\r?\\n");
             if (lines.length > 0) {
                 String firstLine = lines[0].trim();
-                if (!firstLine.isEmpty()) headerFooterCounts.merge(firstLine, 1, (a, b) -> a + b);
-                
+                if (!firstLine.isEmpty())
+                    headerFooterCounts.merge(firstLine, 1, (a, b) -> a + b);
+
                 String lastLine = lines[lines.length - 1].trim();
-                if (!lastLine.isEmpty()) headerFooterCounts.merge(lastLine, 1, (a, b) -> a + b);
+                if (!lastLine.isEmpty())
+                    headerFooterCounts.merge(lastLine, 1, (a, b) -> a + b);
             }
         }
 
@@ -271,13 +293,13 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             for (String noise : noiseLines) {
                 text = text.replace(noise, "");
             }
-            
+
             // 2. 正则清洗乱码、控制字符等
             // 移除 ASCII 控制字符
             text = text.replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]", "");
             // 移除连续的空白字符
             text = text.replaceAll("\\s{2,}", " ");
-            
+
             return new PageContent(pc.pageNumber(), text.trim());
         }).collect(Collectors.toList());
     }
@@ -291,7 +313,8 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             String documentName) {
 
         List<Document> childDocuments = new ArrayList<>();
-        TokenTextSplitter parentSplitter = new TokenTextSplitter(PARENT_CHUNK_SIZE, PARENT_CHUNK_OVERLAP, 5, 1000, true);
+        TokenTextSplitter parentSplitter = new TokenTextSplitter(PARENT_CHUNK_SIZE, PARENT_CHUNK_OVERLAP, 5, 1000,
+                true);
         TokenTextSplitter childSplitter = new TokenTextSplitter(CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, 5, 1000, true);
 
         int globalChildIndex = 0;
@@ -303,12 +326,13 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
         for (PageContent pageContent : pageContents) {
             int pageNumber = pageContent.pageNumber();
             String pageText = pageContent.text();
-            
-            if (pageText.isEmpty()) continue;
+
+            if (pageText.isEmpty())
+                continue;
 
             // 获取该页的所有图片
             List<PdfImageInfo> pageImages = imagesByPage.getOrDefault(pageNumber, Collections.emptyList());
-            
+
             List<Map<String, Object>> imageMetadataList = pageImages.stream()
                     .map(img -> Map.of(
                             "fileName", (Object) img.getFileName(),
@@ -325,13 +349,13 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
 
                 for (Document childChunk : children) {
                     globalChildIndex++;
-                    
+
                     Map<String, Object> metadata = new HashMap<>(childChunk.getMetadata());
                     metadata.put("documentName", documentName);
                     metadata.put("pageNumber", pageNumber);
                     metadata.put("childIndex", globalChildIndex);
                     metadata.put("timestamp", Instant.now().toString());
-                    
+
                     // 核心逻辑：关联父块文本
                     metadata.put("parent_text", parentChunk.getText());
                     metadata.put("is_child", true);
@@ -366,6 +390,12 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
 
         // 替换特殊字符
         return fileName.replaceAll("[^a-zA-Z0-9_\\u4e00-\\u9fa5-]", "_");
+    }
+
+    /**
+     * 图片上传结果记录
+     */
+    private record ImageUploadResult(String ossUrl, String fileName) {
     }
 
     /**

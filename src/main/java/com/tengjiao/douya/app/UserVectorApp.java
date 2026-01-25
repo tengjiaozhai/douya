@@ -1,7 +1,5 @@
 package com.tengjiao.douya.app;
 
-
-
 import org.springframework.ai.chroma.vectorstore.ChromaApi;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
@@ -35,7 +33,7 @@ public class UserVectorApp {
      * 存储向量数据（按 userId 隔离）
      *
      * @param documents 要存储的文档列表
-     * @param userId 用户ID，用于数据隔离
+     * @param userId    用户ID，用于数据隔离
      */
     public void addDocuments(List<Document> documents, String userId) {
         if (documents == null || documents.isEmpty()) {
@@ -52,16 +50,21 @@ public class UserVectorApp {
             doc.getMetadata().put("timestamp", System.currentTimeMillis());
         });
 
-        // 存储到向量数据库
-        chromaVectorStore.add(documents);
+        // 存储到向量数据库 (分批存储，解决 DashScope 单次请求限制，目前限制为 10 条)
+        int batchSize = 10;
+        for (int i = 0; i < documents.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, documents.size());
+            List<Document> batch = documents.subList(i, end);
+            chromaVectorStore.add(batch);
+        }
     }
 
     /**
      * 相似度搜索（按 userId 隔离）
      *
-     * @param query 查询文本（例如："我想吃川菜"）
-     * @param userId 用户ID，只搜索该用户的数据
-     * @param topK 返回最相似的 K 条结果（默认5条）
+     * @param query               查询文本（例如："我想吃川菜"）
+     * @param userId              用户ID，只搜索该用户的数据
+     * @param topK                返回最相似的 K 条结果（默认5条）
      * @param similarityThreshold 相似度阈值（0-1之间，默认0.7）
      * @return 相似文档列表
      */
@@ -81,11 +84,11 @@ public class UserVectorApp {
         // 设置默认值
         int k = (topK != null && topK > 0) ? topK : 5;
         double threshold = (similarityThreshold != null && similarityThreshold >= 0 && similarityThreshold <= 1)
-                ? similarityThreshold : 0.7;
+                ? similarityThreshold
+                : 0.7;
 
         // 构建搜索请求，使用 userId 过滤实现数据隔离
-        SearchRequest searchRequest =
-            SearchRequest.builder()
+        SearchRequest searchRequest = SearchRequest.builder()
                 .query(query)
                 .topK(k)
                 .similarityThreshold(threshold)
@@ -94,7 +97,7 @@ public class UserVectorApp {
 
         // 执行相似度搜索
         List<Document> docs = chromaVectorStore.similaritySearch(searchRequest);
-        
+
         // 应用 Parent-Child 策略：替换为父块文本并去重
         return applyParentContext(docs);
     }
@@ -102,7 +105,7 @@ public class UserVectorApp {
     /**
      * 相似度搜索（使用默认参数）
      *
-     * @param query 查询文本
+     * @param query  查询文本
      * @param userId 用户ID
      * @return 最相似的5条结果（相似度阈值0.7）
      */
@@ -113,7 +116,7 @@ public class UserVectorApp {
     /**
      * 获取所有文档（调试用）
      *
-     * @param limit 返回文档的最大数量
+     * @param limit  返回文档的最大数量
      * @param userId 用户ID（可选），如果提供则只返回该用户的文档
      * @return 文档列表
      */
@@ -124,8 +127,7 @@ public class UserVectorApp {
         // 构建搜索请求
         // 注意：由于 VectorStore 接口基于相似度搜索，我们使用一个通用查询词
         // 并设置较低的相似度阈值来获取更多结果
-        SearchRequest.Builder requestBuilder =
-            SearchRequest.builder()
+        SearchRequest.Builder requestBuilder = SearchRequest.builder()
                 .query("text") // 使用通用查询词而不是空字符串
                 .topK(k)
                 .similarityThreshold(0.0); // 最低阈值，接受所有结果
@@ -143,17 +145,45 @@ public class UserVectorApp {
     }
 
     /**
+     * 搜索公共文档（不带 userId 过滤）
+     * 适用于检索 PDF 文档上传等系统级公共知识
+     *
+     * @param query 查询文本
+     * @param topK  数量
+     * @return 包含元数据封装好的文档列表
+     */
+    public List<Document> searchPublic(String query, Integer topK) {
+        int k = (topK != null && topK > 0) ? topK : 5;
+
+        // 构建搜索请求：不指定 filterExpression 默认检索全库
+        // 如果后续需要明确区分，可以在上传时添加 public=true 并在此时过滤
+        SearchRequest searchRequest = SearchRequest.builder()
+                .query(query)
+                .topK(k)
+                .similarityThreshold(0.5) // 设置适中的阈值确保质量
+                .build();
+
+        List<Document> docs = chromaVectorStore.similaritySearch(searchRequest);
+
+        // 排除掉带有 userId 的文档，只保留公共文档
+        List<Document> publicDocs = docs.stream()
+                .filter(doc -> !doc.getMetadata().containsKey("userId"))
+                .toList();
+
+        return applyParentContext(publicDocs);
+    }
+
+    /**
      * 搜索所有文档（不使用 userId 过滤，仅用于调试）
      *
      * @param query 查询文本
-     * @param topK 返回数量
+     * @param topK  返回数量
      * @return 文档列表
      */
     public List<Document> searchWithoutFilter(String query, Integer topK) {
         int k = (topK != null && topK > 0) ? topK : 5;
 
-        SearchRequest searchRequest =
-            SearchRequest.builder()
+        SearchRequest searchRequest = SearchRequest.builder()
                 .query(query)
                 .topK(k)
                 .similarityThreshold(0.7)
@@ -176,8 +206,8 @@ public class UserVectorApp {
 
         for (Document doc : docs) {
             String parentText = (String) doc.getMetadata().get("parent_text");
-            String contentToUse = (parentText != null && !parentText.trim().isEmpty()) 
-                    ? parentText 
+            String contentToUse = (parentText != null && !parentText.trim().isEmpty())
+                    ? parentText
                     : doc.getText();
 
             // 如果该父块（或同内容片段）尚未加入，则加入
@@ -214,17 +244,17 @@ public class UserVectorApp {
         // 2. 构建原始 API 请求
         // 源码中 GetEmbeddingsRequest 的构造函数之一支持 (ids, where, limit, offset, include)
         ChromaApi.GetEmbeddingsRequest getRequest = new ChromaApi.GetEmbeddingsRequest(
-                null,           // ids
-                null,           // where clause
-                k,              // limit
-                0,              // offset
-                List.of(ChromaApi.QueryRequest.Include.DOCUMENTS, 
+                null, // ids
+                null, // where clause
+                k, // limit
+                0, // offset
+                List.of(ChromaApi.QueryRequest.Include.DOCUMENTS,
                         ChromaApi.QueryRequest.Include.METADATAS,
-                        ChromaApi.QueryRequest.Include.EMBEDDINGS)
-        );
+                        ChromaApi.QueryRequest.Include.EMBEDDINGS));
 
         // 3. 调用底层 API
-        ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(tenant, database, collection.id(), getRequest);
+        ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(tenant, database, collection.id(),
+                getRequest);
 
         // 4. 组装结果，尽可能贴合用户展示的格式
         Map<String, Object> result = new HashMap<>();
@@ -269,7 +299,7 @@ public class UserVectorApp {
         for (int i = 0; i < totalScan; i++) {
             String id = ids.get(i);
             String content = documents.get(i);
-            
+
             if (contentMap.containsKey(content)) {
                 // 重复出现，记录 ID 准备删除
                 idsToDelete.add(id);

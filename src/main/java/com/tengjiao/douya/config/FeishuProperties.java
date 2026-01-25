@@ -38,4 +38,9 @@ public class FeishuProperties {
      * 发送消息的 URL
      */
     private String messageSendUrl = "https://open.feishu.cn/open-apis/im/v1/messages";
+
+    /**
+     * 上传图片的 URL
+     */
+    private String imageUploadUrl = "https://open.feishu.cn/open-apis/im/v1/images";
 }

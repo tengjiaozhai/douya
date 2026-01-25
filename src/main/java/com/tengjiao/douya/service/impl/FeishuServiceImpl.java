@@ -69,7 +69,8 @@ public class FeishuServiceImpl implements FeishuService {
 
             HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
 
-            ResponseEntity<FeishuTokenResponse> response = restTemplate.postForEntity(feishuProperties.getAppTokenUrl(), request, FeishuTokenResponse.class);
+            ResponseEntity<FeishuTokenResponse> response = restTemplate.postForEntity(feishuProperties.getAppTokenUrl(),
+                    request, FeishuTokenResponse.class);
 
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 FeishuTokenResponse respBody = response.getBody();
@@ -123,7 +124,8 @@ public class FeishuServiceImpl implements FeishuService {
 
             HttpEntity<Map<String, String>> request = new HttpEntity<>(body, headers);
 
-            ResponseEntity<FeishuTokenResponse> response = restTemplate.postForEntity(feishuProperties.getTenantTokenUrl(), request, FeishuTokenResponse.class);
+            ResponseEntity<FeishuTokenResponse> response = restTemplate
+                    .postForEntity(feishuProperties.getTenantTokenUrl(), request, FeishuTokenResponse.class);
 
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 FeishuTokenResponse respBody = response.getBody();
@@ -153,7 +155,7 @@ public class FeishuServiceImpl implements FeishuService {
     @Override
     public FeishuMessageSendResponse sendMessage(String receiveIdType, FeishuMessageSendRequest request) {
         String tenantToken = getTenantAccessToken();
-        
+
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.set("Authorization", "Bearer " + tenantToken);
@@ -165,8 +167,9 @@ public class FeishuServiceImpl implements FeishuService {
 
         try {
             log.info("发送飞书消息: url={}, request={}", url, request);
-            ResponseEntity<FeishuMessageSendResponse> response = restTemplate.postForEntity(url, httpEntity, FeishuMessageSendResponse.class);
-            
+            ResponseEntity<FeishuMessageSendResponse> response = restTemplate.postForEntity(url, httpEntity,
+                    FeishuMessageSendResponse.class);
+
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 FeishuMessageSendResponse respBody = response.getBody();
                 if (respBody.getCode() == 0) {
@@ -183,6 +186,55 @@ public class FeishuServiceImpl implements FeishuService {
         } catch (Exception e) {
             log.error("发送飞书消息异常", e);
             throw new RuntimeException("发送飞书消息异常", e);
+        }
+    }
+
+    @Override
+    public String uploadImage(java.io.File imageFile) {
+        if (imageFile == null || !imageFile.exists()) {
+            throw new IllegalArgumentException("图片文件不存在");
+        }
+
+        String tenantToken = getTenantAccessToken();
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        headers.set("Authorization", "Bearer " + tenantToken);
+
+        org.springframework.util.MultiValueMap<String, Object> body = new org.springframework.util.LinkedMultiValueMap<>();
+        body.add("image_type", "message");
+        body.add("image", new org.springframework.core.io.FileSystemResource(imageFile));
+
+        HttpEntity<org.springframework.util.MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body,
+                headers);
+
+        try {
+            log.info("开始上传图片到飞书: file={}", imageFile.getAbsolutePath());
+            String url = feishuProperties.getImageUploadUrl();
+
+            ResponseEntity<com.tengjiao.douya.entity.feishu.FeishuImageUploadResponse> response = restTemplate
+                    .postForEntity(
+                            url,
+                            requestEntity,
+                            com.tengjiao.douya.entity.feishu.FeishuImageUploadResponse.class);
+
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                com.tengjiao.douya.entity.feishu.FeishuImageUploadResponse respBody = response.getBody();
+                if (respBody.getCode() != null && respBody.getCode() == 0) {
+                    String imageKey = respBody.getData().getImageKey();
+                    log.info("图片上传成功: imageKey={}", imageKey);
+                    return imageKey;
+                } else {
+                    log.error("图片上传失败: code={}, msg={}", respBody.getCode(), respBody.getMsg());
+                    throw new RuntimeException("图片上传失败: " + respBody.getMsg());
+                }
+            } else {
+                log.error("请求飞书上传图片接口失败: status={}", response.getStatusCode());
+                throw new RuntimeException("请求飞书上传图片接口失败");
+            }
+        } catch (Exception e) {
+            log.error("上传图片异常", e);
+            throw new RuntimeException("上传图片异常", e);
         }
     }
 

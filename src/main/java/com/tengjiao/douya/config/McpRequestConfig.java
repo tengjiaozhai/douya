@@ -16,12 +16,12 @@ import java.util.Map;
  * @author 沈鸣杰
  * @since 2026-01-16 21:00
  */
-@Configuration
+//@Configuration
 public class McpRequestConfig {
     @Value("${aigohotel-mcp.api-key}")
     private String apiKey;
 
-    @Bean
+//    @Bean
     public McpSyncHttpClientRequestCustomizer mcpSyncHttpClientRequestCustomizer() {
         // 可以设置默认的 headers，但 Authorization 会从当前请求中动态获取
         Map<String, String> headers = new HashMap<>();
@@ -30,7 +30,7 @@ public class McpRequestConfig {
         return new HeaderSyncHttpRequestCustomizer(headers);
     }
 
-    @Bean
+//    @Bean
     public HttpClient httpClient() {
         return HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1) // 明确使用 HTTP/1.1，因为 Tengine 似乎不支持 H2 的 SSE 模式
