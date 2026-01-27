@@ -30,7 +30,7 @@ spring:
             api-key: api-key
         mcp:
             client:
-                enabled: true
+                enabled: false
                 stdio:
                     servers-configuration: classpath:mcp-servers-system.json
                 streamable-http:

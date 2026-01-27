@@ -230,8 +230,9 @@ public class UserVectorApp {
      * 直接通过 ChromaApi 获取原始结构数据
      * 参考底层结构，返回包含 ids, documents, metadatas 的原始 Map
      */
-    public Map<String, Object> getChromaRawData(String collectionName, Integer limit) {
+    public Map<String, Object> getChromaRawData(String collectionName, Integer limit, Integer offset) {
         int k = (limit != null && limit > 0) ? limit : 100;
+        int o = (offset != null && offset >= 0) ? offset : 0;
         String tenant = "SpringAiTenant";
         String database = "SpringAiDatabase";
 
@@ -247,7 +248,7 @@ public class UserVectorApp {
                 null, // ids
                 null, // where clause
                 k, // limit
-                0, // offset
+                o, // offset
                 List.of(ChromaApi.QueryRequest.Include.DOCUMENTS,
                         ChromaApi.QueryRequest.Include.METADATAS,
                         ChromaApi.QueryRequest.Include.EMBEDDINGS));
@@ -283,7 +284,7 @@ public class UserVectorApp {
         }
 
         // 2. 获取全量数据进行扫描 (此处 limit 设置较大以覆盖现有测试数据)
-        Map<String, Object> rawData = getChromaRawData(collectionName, 5000);
+        Map<String, Object> rawData = getChromaRawData(collectionName, 5000, 0);
         List<String> ids = (List<String>) rawData.get("ids");
         List<String> documents = (List<String>) rawData.get("documents");
 

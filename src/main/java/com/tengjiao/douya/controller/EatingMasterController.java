@@ -115,11 +115,12 @@ public class EatingMasterController {
     @GetMapping("/vector/collection/raw")
     @Operation(summary = "获取 Collection 的原始向量内容（参考 Chroma get 接口）")
     public Map<String, Object> getCollectionRaw(
-            @RequestParam(required = false, defaultValue = "100") Integer limit) {
+            @RequestParam(required = false, defaultValue = "100") Integer limit,
+            @RequestParam(required = false, defaultValue = "0") Integer offset) {
 
         String collectionName = chromaProperties.getCollectionName();
         try {
-            return userVectorApp.getChromaRawData(collectionName, limit);
+            return userVectorApp.getChromaRawData(collectionName, limit, offset);
         } catch (Exception e) {
             Map<String, Object> error = new HashMap<>();
             error.put("error", e.getMessage());

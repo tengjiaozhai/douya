@@ -238,6 +238,46 @@
         max-height: 200px;
         overflow-y: auto;
       }
+
+      .pagination {
+        margin-top: 3rem;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 2rem;
+      }
+
+      .btn {
+        background: var(--primary);
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 0.5rem;
+        cursor: pointer;
+        font-family: 'Outfit', sans-serif;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 6px -1px rgba(99, 102, 241, 0.4);
+      }
+
+      .btn:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 15px -3px rgba(99, 102, 241, 0.5);
+        filter: brightness(1.1);
+      }
+
+      .btn:disabled {
+        background: #334155;
+        cursor: not-allowed;
+        box-shadow: none;
+        opacity: 0.5;
+      }
+
+      #page-info {
+        font-family: 'Outfit', sans-serif;
+        font-size: 1.1rem;
+        color: var(--accent);
+      }
     </style>
   </head>
   <body>
@@ -266,6 +306,13 @@
 
       <div id="loader" class="loader"></div>
       <div id="vector-container" class="vector-grid"></div>
+
+      <!-- 分页控制 -->
+      <div class="pagination" id="pagination-controls">
+        <button class="btn" id="prev-btn" onclick="prevPage()">上一页</button>
+        <span id="page-info">第 1 页</span>
+        <button class="btn" id="next-btn" onclick="nextPage()">下一页</button>
+      </div>
     </div>
 
     <div id="detail-modal">
@@ -289,12 +336,17 @@
     <script>
       const container = document.getElementById('vector-container');
       const loader = document.getElementById('loader');
+      let currentOffset = 0;
+      const pageSize = 50; // 每页显示数量
 
       async function fetchData() {
+        container.innerHTML = '';
+        loader.style.display = 'block';
+        document.getElementById('pagination-controls').style.opacity = '0.5';
+
         try {
-          // 注意 context-path 是 /api
           const response = await fetch(
-            '/api/douya/eating/vector/collection/raw?limit=100'
+            `/api/douya/eating/vector/collection/raw?limit=${pageSize}&offset=${currentOffset}`
           );
           const data = await response.json();
 
@@ -306,11 +358,36 @@
 
           renderDocs(data);
           updateStats(data);
+          updatePagination(data);
           loader.style.display = 'none';
+          document.getElementById('pagination-controls').style.opacity = '1';
         } catch (e) {
           console.error(e);
           container.innerHTML = `<div style="color: #ef4444; text-align: center; grid-column: 1/-1;">无法连接后端 API</div>`;
           loader.style.display = 'none';
+        }
+      }
+
+      function updatePagination(data) {
+        const page = Math.floor(currentOffset / pageSize) + 1;
+        document.getElementById('page-info').textContent = `第 ${page} 页`;
+        document.getElementById('prev-btn').disabled = currentOffset === 0;
+        // 如果返回的数据量小于 pageSize，说明没有下一页了
+        document.getElementById('next-btn').disabled =
+          data.ids.length < pageSize;
+      }
+
+      function nextPage() {
+        currentOffset += pageSize;
+        fetchData();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+
+      function prevPage() {
+        if (currentOffset >= pageSize) {
+          currentOffset -= pageSize;
+          fetchData();
+          window.scrollTo({ top: 0, behavior: 'smooth' });
         }
       }
 
