@@ -46,7 +46,6 @@ public class ModelConfig {
                 .maxToken(2000)
                 .enableSearch(true)
                 .searchOptions(DashScopeApiSpec.SearchOptions.builder().forcedSearch(true).build())
-                .responseFormat(DashScopeResponseFormat.builder().type(DashScopeResponseFormat.Type.JSON_OBJECT).build())
                 .topP(0.9)
                 .model("qwen-plus")
                 .build())
@@ -106,6 +105,26 @@ public class ModelConfig {
         return OpenAiChatModel.builder()
             .openAiApi(openAiApi)
             .defaultOptions(openAiChatOptions)
+            .build();
+    }
+
+    // 文本转换模型
+    @Bean
+    public ChatModel structTransformModel() {
+        DashScopeApi dashScopeApi = DashScopeApi.builder()
+            .apiKey(apiKey)
+            .build();
+        return DashScopeChatModel.builder()
+            .dashScopeApi(dashScopeApi)
+            .defaultOptions(DashScopeChatOptions.builder()
+                .temperature(0.5)
+                .maxToken(2000)
+                .enableSearch(true)
+                .searchOptions(DashScopeApiSpec.SearchOptions.builder().forcedSearch(true).build())
+                .responseFormat(DashScopeResponseFormat.builder().type(DashScopeResponseFormat.Type.JSON_OBJECT).build())
+                .topP(0.9)
+                .model("qwen-flash")
+                .build())
             .build();
     }
 }

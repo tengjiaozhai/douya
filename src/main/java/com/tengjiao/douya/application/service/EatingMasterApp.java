@@ -99,6 +99,7 @@ public class EatingMasterApp {
 
 
     private final ChatModel eatingMasterModel;
+    private final ChatModel structTransformModel;
     private final ChatModel summaryChatModel;
     private final Store douyaDatabaseStore;
     private final UserVectorApp userVectorApp;
@@ -107,9 +108,10 @@ public class EatingMasterApp {
 
     private final Store memoryStore = new MemoryStore();
 
-    public EatingMasterApp(ChatModel eatingMasterModel, ChatModel summaryChatModel, Store douyaDatabaseStore,
+    public EatingMasterApp(ChatModel eatingMasterModel, ChatModel structTransformModel, ChatModel summaryChatModel, Store douyaDatabaseStore,
                            UserVectorApp userVectorApp, ChatModel readUnderstandModel, ChatModel douBaoTransitDeepseek) {
         this.eatingMasterModel = eatingMasterModel;
+        this.structTransformModel = structTransformModel;
         this.summaryChatModel = summaryChatModel;
         this.douyaDatabaseStore = douyaDatabaseStore;
         this.userVectorApp = userVectorApp;
@@ -173,7 +175,7 @@ public class EatingMasterApp {
                 Collections.emptyList());
         ReactAgent promptRewriterAgent = promptRewriterAgentObj.build();
 
-        ResponseFormatterAgent responseFormatterAgentObj = new ResponseFormatterAgent(eatingMasterModel,
+        ResponseFormatterAgent responseFormatterAgentObj = new ResponseFormatterAgent(structTransformModel,
                 Collections.emptyList(),
                 Collections.emptyList(),
                 Collections.emptyList());
@@ -224,6 +226,7 @@ public class EatingMasterApp {
                     Object output = state.data().get("ResponseFormatter");
                     if (output instanceof AssistantMessage am) {
                         // 这里不再调用 saveConversationPair，或者可以根据需要记录
+                        saveConversationPair(userId, userMessage.getText(), am.getText(), "ResponseFormatter");
                         return am.getText();
                     }
                 }
