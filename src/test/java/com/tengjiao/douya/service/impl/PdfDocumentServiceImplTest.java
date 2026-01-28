@@ -1,8 +1,9 @@
 package com.tengjiao.douya.service.impl;
 
-import com.tengjiao.douya.model.PdfImageInfo;
-import com.tengjiao.douya.model.PdfProcessResult;
-import com.tengjiao.douya.service.PdfDocumentService;
+import com.tengjiao.douya.domain.eating.model.PdfProcessResult;
+import com.tengjiao.douya.domain.eating.service.PdfDocumentService;
+
+
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

@@ -1,6 +1,8 @@
 package com.tengjiao.douya.service.impl;
 
-import com.tengjiao.douya.service.OssService;
+import com.tengjiao.douya.infrastructure.oss.OssService;
+
+
 import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;

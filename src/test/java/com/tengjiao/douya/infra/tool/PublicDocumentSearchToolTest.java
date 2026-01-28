@@ -1,6 +1,9 @@
 package com.tengjiao.douya.infra.tool;
 
-import com.tengjiao.douya.app.UserVectorApp;
+import com.tengjiao.douya.infrastructure.tool.PublicDocumentSearchTool;
+import com.tengjiao.douya.infrastructure.vectorstore.UserVectorApp;
+
+
 import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;

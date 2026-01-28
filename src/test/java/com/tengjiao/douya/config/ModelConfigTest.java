@@ -1,5 +1,7 @@
 package com.tengjiao.douya.config;
 
+
+
 import jakarta.annotation.Resource;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;

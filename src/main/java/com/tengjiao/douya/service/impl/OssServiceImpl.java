@@ -1,12 +1,14 @@
 package com.tengjiao.douya.service.impl;
 
+import com.tengjiao.douya.infrastructure.config.OssConfig;
+import com.tengjiao.douya.infrastructure.oss.OssService;
+
+
 import com.aliyun.oss.OSS;
 import com.aliyun.oss.OSSClientBuilder;
 import com.aliyun.oss.model.ListObjectsRequest;
 import com.aliyun.oss.model.ObjectListing;
 import com.aliyun.oss.model.OSSObjectSummary;
-import com.tengjiao.douya.config.OssConfig;
-import com.tengjiao.douya.service.OssService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;

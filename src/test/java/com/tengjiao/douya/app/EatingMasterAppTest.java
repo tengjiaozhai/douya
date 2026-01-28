@@ -1,5 +1,8 @@
 package com.tengjiao.douya.app;
 
+import com.tengjiao.douya.application.service.EatingMasterApp;
+
+
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;

@@ -138,28 +138,33 @@ mvn spring-boot:run
     RedisStore redisStore = new RedisStore(redisTemplate);
     ```
 
-## 项目结构
+## 项目结构 (DDD 架构)
+
+项目遵循 **领域驱动设计 (DDD)** 规范进行架构演进，实现纵向层级解耦与横向业务聚合。
 
 ```
 douya
 ├── src/main/java/com/tengjiao/douya
-│   ├── app
-│   │   └── UserVectorApp.java      # 用户向量服务（向量存储与搜索）
-│   ├── config
-│   │   ├── ChromaConfig.java       # Chroma 向量数据库配置
-│   │   ├── ChromaProperties.java   # Chroma 配置属性
-│   │   └── FeishuConfig.java       # 飞书 WebSocket 配置
-│   ├── controller
-│   │   ├── AiController.java       # AI 相关接口
-│   │   └── FeishuController.java   # 飞书 Token 接口
-│   ├── service
-│   │   ├── FeishuService.java      # 飞书服务接口
-│   │   └── impl
-│   │       └── FeishuServiceImpl.java # 飞书服务实现 (Token 缓存)
-│   └── DouyaApplication.java       # 启动类
-├── src/main/resources
-│   ├── application.yml             # 主配置
-│   └── application-dev.yml         # 开发环境配置
+│   ├── application                 # 应用层：负责业务逻辑编排与 Agent 调度
+│   │   ├── service                 # 应用服务 (e.g., EatingMasterApp)
+│   │   ├── graph                   # 状态机定义 (e.g., EatingMasterGraph, SupervisorNode)
+│   │   ├── hook                    # AI 增强 Hooks (e.g., 记忆、偏好学习)
+│   │   └── interceptors            # 系统级拦截器
+│   ├── domain                      # 领域层：核心业务模型与领域能力
+│   │   └── eating                  # 美食专家领域
+│   │       ├── service             # 领域服务 (e.g., PdfDocumentService)
+│   │       └── model               # 领域模型 (e.g., PdfProcessResult, PdfImageInfo)
+│   ├── infrastructure              # 基础设施层：外部集成与底层工具
+│   │   ├── config                  # 全局配置 (Spring AI, Chroma, OSS)
+│   │   ├── vectorstore             # 向量存储封装 (UserVectorApp)
+│   │   ├── oss                     # 阿里云 OSS 客户端
+│   │   ├── external                # 外部系统集成 (Feishu SDK 封装)
+│   │   ├── persistence             # 持久化存储 (PostgresStore)
+│   │   ├── tool                    # Agentic Tool 实现 (SearchTools)
+│   │   └── util                    # 基础工具类
+│   ├── interfaces                  # 接口层：对外暴露的协议与交互
+│   │   └── web                     # HTTP 控制器 (Controllers)
+│   └── DouyaApplication.java       # 系统启动入口 (Root)
 └── pom.xml                         # Maven 依赖配置
 ```
 
@@ -330,6 +335,14 @@ douya
 - **GitHub**: [https://github.com/tengjiao](https://github.com/tengjiao)
 
 ## 更新日志
+
+### 2026-01-28
+
+- **PDF 增强提取与检索精度优化**:
+  - **启用位置排序 (SortByPosition)**: 在 `extractTextByPage` 中启用 PDFBox 的物理位置排序，确保多列式 PDF 手册（如食谱）的阅读顺序符合人类逻辑，彻底解决材料与步骤错位的问题。
+  - **语义化 Parent-Child 切分**: 升级 `TokenTextSplitter` 逻辑，在切分前进行针对性的清洗（剔除页眉页脚、修正换行符），并保证子块（Child）保留父块（Parent）的完整语义上下文。
+  - **检索稳定性增强**: 在 `UserVectorApp` 中增加了 Distance 距离日志，将默认检索阈值精调为 **0.45**，显著提升了对“南瓜粥”等短关键词的召回率。
+  - **一键清理工具**: 在 `UserVectorApp` 中新增 `deleteAll` 接口，支持对 Collection 的物理清空，方便开发者进行数据重灌和模型灰度测试。
 
 ### 2026-01-25
 
