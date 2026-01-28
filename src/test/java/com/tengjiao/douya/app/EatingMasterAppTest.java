@@ -23,8 +23,6 @@ class EatingMasterAppTest {
     @Resource
     private EatingMasterApp eatingMasterApp;
     @Resource
-    private ToolCallbackProvider toolCallbackProvider;
-    @Resource
     private ChatModel eatingMasterModel;
 
     @Test
@@ -40,7 +38,6 @@ class EatingMasterAppTest {
         ReactAgent agent = ReactAgent.builder()
             .name("my_agent")
             .model(eatingMasterModel)
-            .tools(toolCallbackProvider.getToolCallbacks())
             .build();
         AssistantMessage assistantMessage = agent.call("搜索西雅图的酒店");
         System.out.println(assistantMessage.getText());

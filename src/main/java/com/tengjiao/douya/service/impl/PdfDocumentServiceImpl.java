@@ -13,10 +13,11 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+
+import java.util.regex.Pattern;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -42,10 +43,9 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
     private final OssService ossService;
     private final VectorStore chromaVectorStore;
 
-    // 文本切分器配置 - Parent-Child 策略
-    private static final int PARENT_CHUNK_SIZE = 1200;
-    private static final int PARENT_CHUNK_OVERLAP = 200;
-    private static final int CHILD_CHUNK_SIZE = 200;
+    // 文本切分器配置 - 语义化 Parent-Child 策略
+    private static final int PARENT_CONTEXT_SIZE = 500; // 侧向扩展的上下文
+    private static final int CHILD_CHUNK_SIZE = 300;   // 子块大小
     private static final int CHILD_CHUNK_OVERLAP = 50;
 
     // 图片格式
@@ -248,12 +248,17 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
     private List<PageContent> extractTextByPage(PDDocument document) throws IOException {
         List<PageContent> pageContents = new ArrayList<>();
         PDFTextStripper stripper = new PDFTextStripper();
+        stripper.setSortByPosition(true); // 开启位置排序，处理多栏布局更准确
 
         for (int i = 1; i <= document.getNumberOfPages(); i++) {
             stripper.setStartPage(i);
             stripper.setEndPage(i);
             String text = stripper.getText(document);
 
+            // 保持页面的原始性，但在每一页末尾确保有换行
+            if (text != null && !text.endsWith("\n")) {
+                text += "\n";
+            }
             pageContents.add(new PageContent(i, text));
         }
 
@@ -267,38 +272,51 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
         if (pageContents.isEmpty())
             return pageContents;
 
-        // 1. 简单的页眉页脚识别：统计首尾行出现频率
-        Map<String, Integer> headerFooterCounts = new HashMap<>();
+        // 1. 低噪声过滤：识别页眉页脚（高频重复行）
+        Map<String, Integer> lineCounts = new HashMap<>();
         for (PageContent pc : pageContents) {
             String[] lines = pc.text().split("\\r?\\n");
-            if (lines.length > 0) {
-                String firstLine = lines[0].trim();
-                if (!firstLine.isEmpty())
-                    headerFooterCounts.merge(firstLine, 1, (a, b) -> a + b);
-
-                String lastLine = lines[lines.length - 1].trim();
-                if (!lastLine.isEmpty())
-                    headerFooterCounts.merge(lastLine, 1, (a, b) -> a + b);
+            for (String line : lines) {
+                String trimmed = line.trim();
+                if (trimmed.length() > 3) { // 过滤掉太短的行（如页码）
+                    lineCounts.merge(trimmed, 1, (a, b) -> a + b);
+                }
             }
         }
 
-        // 认为出现次数超过总页数一半的行是页眉页脚
-        Set<String> noiseLines = headerFooterCounts.entrySet().stream()
-                .filter(e -> e.getValue() > pageContents.size() * 0.5)
+        // 出现频率极高（如超过 30% 的页面都有）且非正文内容的行
+        Set<String> noiseLines = lineCounts.entrySet().stream()
+                .filter(e -> e.getValue() > pageContents.size() * 0.3)
                 .map(Map.Entry::getKey)
                 .collect(Collectors.toSet());
 
         return pageContents.stream().map(pc -> {
             String text = pc.text();
-            for (String noise : noiseLines) {
-                text = text.replace(noise, "");
+            
+            // 移除高频噪声行
+            String[] lines = text.split("\\r?\\n");
+            StringBuilder cleanedText = new StringBuilder();
+            for (String line : lines) {
+                if (!noiseLines.contains(line.trim())) {
+                    cleanedText.append(line).append("\n");
+                }
             }
+            text = cleanedText.toString();
 
-            // 2. 正则清洗乱码、控制字符等
+            // 2. 正则清洗：移除页码、乱码、连续符号
+            // 移除孤立的页码（如 " - 1 - ", " 1 / 10 ", "Page 1"）
+            text = text.replaceAll("(?m)^\\s*第\\s*\\d+\\s*页.*$", "");
+            text = text.replaceAll("(?m)^\\s*-\\s*\\d+\\s*-\\s*$", "");
+            text = text.replaceAll("(?m)^\\s*\\d+\\s*/\\s*\\d+\\s*$", "");
+            
             // 移除 ASCII 控制字符
             text = text.replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]", "");
-            // 移除连续的空白字符
-            text = text.replaceAll("\\s{2,}", " ");
+            
+            // 规范化空白字符，但保留至少一个换行以维持结构
+            text = text.replaceAll("[^\\S\\r\\n]{2,}", " "); 
+            
+            // 移除过多的连续空行
+            text = text.replaceAll("\\n{3,}", "\n\n");
 
             return new PageContent(pc.pageNumber(), text.trim());
         }).collect(Collectors.toList());
@@ -312,71 +330,131 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             List<PdfImageInfo> allImages,
             String documentName) {
 
-        List<Document> childDocuments = new ArrayList<>();
-        TokenTextSplitter parentSplitter = new TokenTextSplitter(PARENT_CHUNK_SIZE, PARENT_CHUNK_OVERLAP, 5, 1000,
-                true);
-        TokenTextSplitter childSplitter = new TokenTextSplitter(CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP, 5, 1000, true);
-
-        int globalChildIndex = 0;
-
-        // 预分组图片，提高检索效率
-        Map<Integer, List<PdfImageInfo>> imagesByPage = allImages.stream()
-                .collect(Collectors.groupingBy(PdfImageInfo::getPageNumber));
-
-        for (PageContent pageContent : pageContents) {
-            int pageNumber = pageContent.pageNumber();
-            String pageText = pageContent.text();
-
-            if (pageText.isEmpty())
-                continue;
-
-            // 获取该页的所有图片
-            List<PdfImageInfo> pageImages = imagesByPage.getOrDefault(pageNumber, Collections.emptyList());
-
-            List<Map<String, Object>> imageMetadataList = pageImages.stream()
-                    .map(img -> Map.of(
-                            "fileName", (Object) img.getFileName(),
-                            "ossUrl", img.getOssUrl(),
-                            "position", "page" + img.getPageNumber()))
-                    .collect(Collectors.toList());
-
-            // 1. 先切分为 Parent 块
-            List<Document> parents = parentSplitter.apply(List.of(new Document(pageText)));
-
-            for (Document parentChunk : parents) {
-                // 2. 在 Parent 内部切分为更精确的 Child 块
-                List<Document> children = childSplitter.apply(List.of(parentChunk));
-
-                for (Document childChunk : children) {
-                    globalChildIndex++;
-
-                    Map<String, Object> metadata = new HashMap<>(childChunk.getMetadata());
-                    metadata.put("documentName", documentName);
-                    metadata.put("pageNumber", pageNumber);
-                    metadata.put("childIndex", globalChildIndex);
-                    metadata.put("timestamp", Instant.now().toString());
-
-                    // 核心逻辑：关联父块文本
-                    metadata.put("parent_text", parentChunk.getText());
-                    metadata.put("is_child", true);
-
-                    // 关联该页图片
-                    if (!imageMetadataList.isEmpty()) {
-                        metadata.put("images", imageMetadataList);
-                    }
-
-                    Document enrichedChild = Document.builder()
-                            .id(UUID.randomUUID().toString())
-                            .text(childChunk.getText())
-                            .metadata(metadata)
-                            .build();
-
-                    childDocuments.add(enrichedChild);
-                }
-            }
+        List<Document> resultDocuments = new ArrayList<>();
+        
+        // 1. 合并全文并记录页码边界
+        StringBuilder fullText = new StringBuilder();
+        TreeMap<Integer, Integer> offsetToPageMap = new TreeMap<>();
+        for (PageContent pc : pageContents) {
+            offsetToPageMap.put(fullText.length(), pc.pageNumber());
+            fullText.append(pc.text()).append("\n\n"); // 页面间留空，避免语义强行连接
         }
 
-        return childDocuments;
+        // 2. 语义化递归切分 (优先切分段落、句子)
+        // 此处模拟 RecursiveCharacterTextSplitter 逻辑
+        List<String> childTexts = recursiveSplit(fullText.toString(), CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP);
+        
+        // 3. 预分组图片
+        Map<Integer, List<Map<String, Object>>> imagesByPage = allImages.stream()
+                .collect(Collectors.groupingBy(PdfImageInfo::getPageNumber,
+                        Collectors.mapping(img -> Map.of(
+                                "fileName", (Object) img.getFileName(),
+                                "ossUrl", img.getOssUrl(),
+                                "pageNumber", img.getPageNumber()), Collectors.toList())));
+
+        int currentSearchOffset = 0;
+        for (int i = 0; i < childTexts.size(); i++) {
+            String childText = childTexts.get(i);
+            
+            // 确定子块所在的原文位置（由于 Splitter 的特性，需向后搜索）
+            int startOffset = fullText.indexOf(childText, currentSearchOffset);
+            if (startOffset == -1) startOffset = currentSearchOffset; // 降级处理
+            int endOffset = startOffset + childText.length();
+            currentSearchOffset = startOffset + (childText.length() / 2); // 移动搜索起点
+
+            // 确定涉及的页码
+            Integer startPage = offsetToPageMap.floorEntry(startOffset).getValue();
+            Integer endPage = offsetToPageMap.floorEntry(Math.max(0, endOffset - 1)).getValue();
+            
+            // 4. 构建 Parent Context (在子块前后扩展一定范围)
+            int parentStart = Math.max(0, startOffset - PARENT_CONTEXT_SIZE);
+            int parentEnd = Math.min(fullText.length(), endOffset + PARENT_CONTEXT_SIZE);
+            String parentText = fullText.substring(parentStart, parentEnd).trim();
+
+            // 5. 关联图片 (涉及的所有页面的图片均可见)
+            List<Map<String, Object>> associatedImages = new ArrayList<>();
+            for (int p = startPage; p <= endPage; p++) {
+                associatedImages.addAll(imagesByPage.getOrDefault(p, Collections.emptyList()));
+            }
+
+            // 构建元数据
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("documentName", documentName);
+            metadata.put("pageNumber", startPage == endPage ? String.valueOf(startPage) : startPage + "-" + endPage);
+            metadata.put("childIndex", i + 1);
+            metadata.put("timestamp", Instant.now().toString());
+            metadata.put("is_child", true);
+            metadata.put("parent_text", parentText);
+            
+            if (!associatedImages.isEmpty()) {
+                metadata.put("images", associatedImages);
+            }
+
+            Document doc = Document.builder()
+                    .id(UUID.randomUUID().toString())
+                    .text(childText)
+                    .metadata(metadata)
+                    .build();
+            
+            resultDocuments.add(doc);
+        }
+
+        return resultDocuments;
+    }
+
+    /**
+     * 简易递归切分器：优先尝试在段落(\n\n)、换行(\n)、标点(。|.)、空格处切分
+     */
+    private List<String> recursiveSplit(String text, int limit, int overlap) {
+        List<String> chunks = new ArrayList<>();
+        if (text == null || text.trim().isEmpty()) return chunks;
+
+        String[] separators = {"\n\n", "\n", "。", "！", "？", ". ", " "};
+        recursiveAction(text, limit, overlap, separators, 0, chunks);
+        return chunks;
+    }
+
+    private void recursiveAction(String text, int limit, int overlap, String[] separators, int sepIdx, List<String> chunks) {
+        if (text.length() <= limit) {
+            chunks.add(text);
+            return;
+        }
+
+        if (sepIdx >= separators.length) {
+            // 实在分不开了，强行按长度切分
+            for (int i = 0; i < text.length(); i += (limit - overlap)) {
+                int end = Math.min(i + limit, text.length());
+                chunks.add(text.substring(i, end));
+                if (end == text.length()) break;
+            }
+            return;
+        }
+
+        String sep = separators[sepIdx];
+        String[] parts = text.split("(?<=" + Pattern.quote(sep) + ")"); // 使用正向后瞻保留分隔符
+        
+        StringBuilder current = new StringBuilder();
+        for (String part : parts) {
+            if (current.length() + part.length() > limit) {
+                if (current.length() > 0) {
+                    chunks.add(current.toString());
+                    // 计算 Overlap: 从当前块尾部回退
+                    int overlapStart = Math.max(0, current.length() - overlap);
+                    String overlapText = current.substring(overlapStart);
+                    current = new StringBuilder(overlapText);
+                }
+                
+                // 如果单部分就超过了 limit，继续递归
+                if (part.length() > limit) {
+                    recursiveAction(part, limit, overlap, separators, sepIdx + 1, chunks);
+                    continue;
+                }
+            }
+            current.append(part);
+        }
+        if (current.length() > overlap) { // 避免只剩下 overlap 部分
+            chunks.add(current.toString());
+        }
     }
 
     /**

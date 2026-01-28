@@ -1,5 +1,8 @@
 package com.tengjiao.douya.infra.tool;
 
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
 import com.tengjiao.douya.app.UserVectorApp;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -17,13 +20,7 @@ import java.util.stream.Collectors;
  * @since 2026-01-25
  */
 @Slf4j
-public class PublicDocumentSearchTool {
-
-    private final UserVectorApp userVectorApp;
-
-    public PublicDocumentSearchTool(UserVectorApp userVectorApp) {
-        this.userVectorApp = userVectorApp;
-    }
+public record PublicDocumentSearchTool(UserVectorApp userVectorApp) {
 
     /**
      * 搜索请求
@@ -68,11 +65,14 @@ public class PublicDocumentSearchTool {
 
                 // 处理图片元数据
                 Object imagesObj = meta.get("images");
-                if (imagesObj instanceof List<?> imagesList) {
-                    sb.append("关联图片地址: \n");
-                    for (Object item : imagesList) {
-                        if (item instanceof Map<?, ?> img) {
-                            sb.append("- ").append(img.get("ossUrl")).append("\n");
+                if (imagesObj instanceof String jsonStr && !jsonStr.isBlank()) {
+                    JSONArray jsonArray = JSON.parseArray(jsonStr);
+
+                    if (jsonArray != null && !jsonArray.isEmpty()) {
+                        sb.append("关联图片地址:\n");
+                        for (int i = 0; i < jsonArray.size(); i++) {
+                            JSONObject img = jsonArray.getJSONObject(i);
+                            sb.append("- ").append(img.getString("ossUrl")).append("\n");
                         }
                     }
                 }

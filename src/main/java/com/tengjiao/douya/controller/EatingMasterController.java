@@ -129,6 +129,20 @@ public class EatingMasterController {
         }
     }
 
+    @DeleteMapping("/vector/document")
+    @Operation(summary = "根据文档名称物理删除向量数据")
+    public Map<String, Object> deleteDocument(@RequestParam String documentName) {
+        String collectionName = chromaProperties.getCollectionName();
+        try {
+            return userVectorApp.deleteByDocumentName(collectionName, documentName);
+        } catch (Exception e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            error.put("status", "FAILED");
+            return error;
+        }
+    }
+
     @PostMapping("/vector/clean")
     @Operation(summary = "手动触发向量库去重清洗")
     public Map<String, Object> cleanVectors() {

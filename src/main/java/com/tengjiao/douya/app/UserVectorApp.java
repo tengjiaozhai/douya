@@ -1,5 +1,6 @@
 package com.tengjiao.douya.app;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chroma.vectorstore.ChromaApi;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
@@ -19,6 +20,7 @@ import java.util.Map;
  * @author tengjiao
  * @since 2025-12-10 15:59
  */
+@Slf4j
 @Component
 public class UserVectorApp {
     private final VectorStore chromaVectorStore;
@@ -160,10 +162,12 @@ public class UserVectorApp {
         SearchRequest searchRequest = SearchRequest.builder()
                 .query(query)
                 .topK(k)
-                .similarityThreshold(0.5) // 设置适中的阈值确保质量
+                .similarityThreshold(0.0) // 设置更温和的阈值以适应短关键词
                 .build();
 
         List<Document> docs = chromaVectorStore.similaritySearch(searchRequest);
+        log.info("[UserVectorApp] Search for '{}' found {} docs. Top distances: {}",
+                query, docs.size(), docs.stream().map(d -> d.getMetadata().get("distance")).toList());
 
         // 排除掉带有 userId 的文档，只保留公共文档
         List<Document> publicDocs = docs.stream()
@@ -264,8 +268,93 @@ public class UserVectorApp {
             result.put("documents", response.documents());
             result.put("metadatas", response.metadata());
             result.put("embeddings", response.embeddings());
+
+            // 补充总数
+            try {
+                long total = chromaApi.countEmbeddings(tenant, database, collection.id());
+                result.put("total", total);
+            } catch (Exception e) {
+                result.put("total", response.ids().size()); // 降级处理
+            }
         }
         return result;
+    }
+
+    public Map<String, Object> deleteAll(String collectionName) {
+        String tenant = "SpringAiTenant";
+        String database = "SpringAiDatabase";
+        ChromaApi.Collection collection = chromaApi.getCollection(tenant, database, collectionName);
+        if (collection == null) return Map.of("error", "Collection not found");
+
+        int totalDeleted = 0;
+        boolean hasMore = true;
+        while (hasMore) {
+            ChromaApi.GetEmbeddingsRequest getRequest = new ChromaApi.GetEmbeddingsRequest(
+                    null, null, 100, 0, List.of());
+            ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(tenant, database, collection.id(), getRequest);
+            List<String> ids = (response != null) ? response.ids() : List.of();
+            if (ids.isEmpty()) {
+                hasMore = false;
+            } else {
+                chromaApi.deleteEmbeddings(tenant, database, collection.id(), new ChromaApi.DeleteEmbeddingsRequest(ids));
+                totalDeleted += ids.size();
+            }
+        }
+        return Map.of("status", "SUCCESS", "deletedCount", totalDeleted);
+    }
+
+    /**
+     * 根据文档名称删除向量数据
+     *
+     * @param collectionName 集合名称
+     * @param documentName   文档名称 (metadata 中的 documentName)
+     * @return 删除结果报告
+     */
+    public Map<String, Object> deleteByDocumentName(String collectionName, String documentName) {
+        String tenant = "SpringAiTenant";
+        String database = "SpringAiDatabase";
+
+        // 1. 获取 Collection
+        ChromaApi.Collection collection = chromaApi.getCollection(tenant, database, collectionName);
+        if (collection == null) {
+            return Map.of("error", "Collection not found: " + collectionName);
+        }
+
+        // 2. 查找匹配该文档名称的所有 ID (分批处理，以防 ID 过多)
+        Map<String, Object> where = Map.of("documentName", documentName);
+        int limit = 1000;
+        int totalDeleted = 0;
+        boolean hasMore = true;
+
+        while (hasMore) {
+            ChromaApi.GetEmbeddingsRequest getRequest = new ChromaApi.GetEmbeddingsRequest(
+                    null,
+                    where,
+                    limit,
+                    0,
+                    List.of(ChromaApi.QueryRequest.Include.METADATAS));
+
+            ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(tenant, database, collection.id(), getRequest);
+            List<String> idsToDelete = (response != null) ? response.ids() : new ArrayList<>();
+
+            if (idsToDelete == null || idsToDelete.isEmpty()) {
+                hasMore = false;
+            } else {
+                ChromaApi.DeleteEmbeddingsRequest deleteRequest = new ChromaApi.DeleteEmbeddingsRequest(idsToDelete);
+                chromaApi.deleteEmbeddings(tenant, database, collection.id(), deleteRequest);
+                totalDeleted += idsToDelete.size();
+                // 如果返回的 ID 数量小于 limit，说明删完了；否则可能还有（虽然删除后 offset 会变，但我们这里 where 条件依然有效）
+                if (idsToDelete.size() < limit) {
+                    hasMore = false;
+                }
+            }
+        }
+
+        Map<String, Object> report = new LinkedHashMap<>();
+        report.put("documentName", documentName);
+        report.put("deletedCount", totalDeleted);
+        report.put("status", "SUCCESS");
+        return report;
     }
 
     /**

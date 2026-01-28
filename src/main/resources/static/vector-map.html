@@ -330,6 +330,27 @@
           原始向量采样 (High Dimension View)
         </h3>
         <div id="modal-vector" class="vector-raw"></div>
+        <div
+          style="
+            margin-top: 2rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            padding-top: 1.5rem;
+          "
+        >
+          <button
+            class="btn"
+            style="
+              background: #ef4444;
+              box-shadow: 0 4px 6px -1px rgba(239, 68, 68, 0.4);
+            "
+            onclick="deleteDocument()"
+          >
+            删除所属文档
+          </button>
+          <p style="font-size: 0.75rem; color: #64748b; margin-top: 0.5rem">
+            此操作将从向量库中物理删除该片段对应的整份 PDF 文档。
+          </p>
+        </div>
       </div>
     </div>
 
@@ -370,11 +391,15 @@
 
       function updatePagination(data) {
         const page = Math.floor(currentOffset / pageSize) + 1;
-        document.getElementById('page-info').textContent = `第 ${page} 页`;
+        const total = data.total || 0;
+        const totalPages = Math.ceil(total / pageSize);
+
+        document.getElementById('page-info').textContent = `第 ${page} / ${
+          totalPages || 1
+        } 页 (总计 ${total})`;
         document.getElementById('prev-btn').disabled = currentOffset === 0;
-        // 如果返回的数据量小于 pageSize，说明没有下一页了
         document.getElementById('next-btn').disabled =
-          data.ids.length < pageSize;
+          currentOffset + pageSize >= total;
       }
 
       function nextPage() {
@@ -392,12 +417,12 @@
       }
 
       function updateStats(data) {
-        document.getElementById('count-docs').textContent = data.ids.length;
+        document.getElementById('count-docs').textContent =
+          data.total || data.ids.length;
         if (data.embeddings && data.embeddings.length > 0) {
           document.getElementById('dim-docs').textContent =
             data.embeddings[0].length;
         }
-        // 获取集合名称可以通过另一个接口，或者硬编码
         document.getElementById('collection-name').textContent =
           'EatingMasterCollection';
       }
@@ -456,6 +481,8 @@
                     <div class="vector-viz">${bars}</div>`;
       }
 
+      let currentModalDocName = '';
+
       function showDetail(id, content, meta, vector) {
         const modal = document.getElementById('detail-modal');
         const body = document.getElementById('modal-body');
@@ -464,6 +491,7 @@
 
         // 确保 meta 不为 null
         const safeMeta = meta || {};
+        currentModalDocName = safeMeta.documentName || '';
 
         // 优先显示完整的 parent_text
         const fullContent = safeMeta.parent_text || content;
@@ -483,6 +511,38 @@
           : 'No vector data available';
 
         modal.style.display = 'flex';
+      }
+
+      async function deleteDocument() {
+        if (!currentModalDocName) return;
+        if (
+          !confirm(
+            `确认要删除文档 "${currentModalDocName}" 及其所有向量分片吗？`
+          )
+        )
+          return;
+
+        try {
+          const response = await fetch(
+            `/api/douya/eating/vector/document?documentName=${encodeURIComponent(
+              currentModalDocName
+            )}`,
+            {
+              method: 'DELETE',
+            }
+          );
+          const result = await response.json();
+          if (result.status === 'SUCCESS') {
+            alert(`成功删除文档，共移除 ${result.deletedCount} 个分片。`);
+            closeModal();
+            fetchData();
+          } else {
+            alert(`删除失败: ${result.error}`);
+          }
+        } catch (e) {
+          alert('删除请求失败');
+          console.error(e);
+        }
       }
 
       function closeModal() {
