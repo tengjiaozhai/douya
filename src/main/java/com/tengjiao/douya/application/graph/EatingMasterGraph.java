@@ -28,7 +28,8 @@ public class EatingMasterGraph {
     private final ChatModel summaryChatModel;
     private final ReactAgent eatingMasterAgent;
     private final ReactAgent visionAgent;
-    private final ReactAgent dailyAgent; // 新增
+    private final ReactAgent dailyAgent;
+    private final ReactAgent promptRewriterAgent; // 新增
     private final String supervisorSystemPrompt;
     private final String supervisorInstruction;
     private final RunnableConfig config;
@@ -36,7 +37,8 @@ public class EatingMasterGraph {
     public EatingMasterGraph(ChatModel summaryChatModel,
                              ReactAgent eatingMasterAgent,
                              ReactAgent visionAgent,
-                             ReactAgent dailyAgent, // 新参数
+                             ReactAgent dailyAgent,
+                             ReactAgent promptRewriterAgent, // 新参数
                              String supervisorSystemPrompt,
                              String supervisorInstruction,
                              RunnableConfig config) {
@@ -44,6 +46,7 @@ public class EatingMasterGraph {
         this.eatingMasterAgent = eatingMasterAgent;
         this.visionAgent = visionAgent;
         this.dailyAgent = dailyAgent;
+        this.promptRewriterAgent = promptRewriterAgent;
         this.supervisorSystemPrompt = supervisorSystemPrompt;
         this.supervisorInstruction = supervisorInstruction;
         this.config = config;
@@ -57,7 +60,8 @@ public class EatingMasterGraph {
             strategies.put("next", new ReplaceStrategy());    // 路由状态覆盖
             strategies.put("EatingMaster", new ReplaceStrategy());
             strategies.put("VisionUnderstand", new ReplaceStrategy());
-            strategies.put("DailyAssistant", new ReplaceStrategy()); // 新增
+            strategies.put("DailyAssistant", new ReplaceStrategy());
+            strategies.put("PromptRewriter", new ReplaceStrategy()); // 新增
             strategies.put("routing_count", new ReplaceStrategy()); // 路由次数计数
             strategies.put("routing_history", new AppendStrategy()); // 路由历史追踪
             return strategies;
@@ -67,7 +71,7 @@ public class EatingMasterGraph {
         // 2.1 Supervisor Node
         SupervisorNode supervisorNode = new SupervisorNode(
                 summaryChatModel,
-                List.of("EatingMaster", "VisionUnderstand", "DailyAssistant"), // 增加新成员
+                List.of("EatingMaster", "VisionUnderstand", "DailyAssistant"),
                 supervisorSystemPrompt,
                 supervisorInstruction
         );
@@ -75,15 +79,18 @@ public class EatingMasterGraph {
         // 2.2 Worker Nodes (Wrapped)
         NodeAction eatingMasterNode = state -> runAgent(eatingMasterAgent, state, "EatingMaster");
         NodeAction visionNode = state -> runAgent(visionAgent, state, "VisionUnderstand");
-        NodeAction dailyNode = state -> runAgent(dailyAgent, state, "DailyAssistant"); // 新增
+        NodeAction dailyNode = state -> runAgent(dailyAgent, state, "DailyAssistant");
+        NodeAction promptRewriterNode = state -> runAgent(promptRewriterAgent, state, "PromptRewriter"); // 新增
 
         // 3. 构建 StateGraph
         StateGraph graph = new StateGraph(keyStrategyFactory)
                 .addNode("supervisor", node_async(supervisorNode))
                 .addNode("EatingMaster", node_async(eatingMasterNode))
                 .addNode("VisionUnderstand", node_async(visionNode))
-                .addNode("DailyAssistant", node_async(dailyNode)) // 新增
-                .addEdge(START, "supervisor")
+                .addNode("DailyAssistant", node_async(dailyNode))
+                .addNode("PromptRewriter", node_async(promptRewriterNode)) // 新增
+                .addEdge(START, "PromptRewriter") // 修改：START -> PromptRewriter
+                .addEdge("PromptRewriter", "supervisor") // 修改：PromptRewriter -> supervisor
                 // 监督者路由逻辑：决定去哪个 Worker
                 .addConditionalEdges(
                         "supervisor",

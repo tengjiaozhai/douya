@@ -5,6 +5,7 @@ import com.tengjiao.douya.entity.feishu.FeishuMessageEvent;
 import com.tengjiao.douya.entity.feishu.FeishuMessageSendRequest;
 import com.tengjiao.douya.entity.feishu.content.FeishuImageContent;
 import com.tengjiao.douya.entity.feishu.content.FeishuPostContent;
+import com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement;
 import com.tengjiao.douya.entity.feishu.content.FeishuPostMessageContent;
 import com.tengjiao.douya.entity.feishu.content.FeishuTextContent;
 import com.tengjiao.douya.infrastructure.external.feishu.FeiShuGetMessageResourceUtils;
@@ -33,11 +34,16 @@ import org.springframework.context.annotation.Configuration;
 
 import java.io.File;
 
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * 飞书 WebSocket 长连接配置
@@ -143,7 +149,7 @@ public class FeishuConfig {
                                             String aiResponse = eatingMasterApp.ask(userQuery, userId);
 
                                             // 3. 解析回复内容，检查是否包含 Markdown 图片
-                                            java.util.regex.Pattern imgPattern = java.util.regex.Pattern
+                                            Pattern imgPattern = Pattern
                                                     .compile("!\\[(.*?)\\]\\((.*?)\\)");
                                             java.util.regex.Matcher matcher = imgPattern.matcher(aiResponse);
 
@@ -152,17 +158,17 @@ public class FeishuConfig {
                                                 // 重置 matcher
                                                 matcher.reset();
 
-                                                com.tengjiao.douya.entity.feishu.content.FeishuPostContent postContent = new com.tengjiao.douya.entity.feishu.content.FeishuPostContent();
+                                                FeishuPostContent postContent = new FeishuPostContent();
                                                 postContent.setTitle("");
 
-                                                java.util.List<com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement> elements = new java.util.ArrayList<>();
+                                                List<PostElement> elements = new java.util.ArrayList<>();
                                                 int lastIndex = 0;
 
                                                 while (matcher.find()) {
                                                     // 添加前面的文本
                                                     String preText = aiResponse.substring(lastIndex, matcher.start());
                                                     if (!preText.isEmpty()) {
-                                                        com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement textElem = new com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement();
+                                                        PostElement textElem = new PostElement();
                                                         textElem.setTag("text");
                                                         textElem.setText(preText);
                                                         elements.add(textElem);
@@ -174,19 +180,19 @@ public class FeishuConfig {
                                                         // 下载图片到临时文件
                                                         String suffix = imgUrl.toLowerCase().endsWith(".png") ? ".png"
                                                                 : ".jpg";
-                                                        java.io.File tempImg = java.io.File
+                                                        File tempImg = File
                                                                 .createTempFile("feishu_upload_", suffix);
-                                                        java.io.InputStream in = java.net.URI.create(imgUrl).toURL()
+                                                        InputStream in = java.net.URI.create(imgUrl).toURL()
                                                                 .openStream();
-                                                        java.nio.file.Files.copy(in, tempImg.toPath(),
-                                                                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                                                        Files.copy(in, tempImg.toPath(),
+                                                                StandardCopyOption.REPLACE_EXISTING);
                                                         in.close();
 
                                                         // 上传到飞书
                                                         String imageKey = feishuService.uploadImage(tempImg);
 
                                                         // 添加图片元素
-                                                        com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement imgElem = new com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement();
+                                                        PostElement imgElem = new PostElement();
                                                         imgElem.setTag("img");
                                                         imgElem.setImageKey(imageKey);
                                                         elements.add(imgElem);
@@ -196,7 +202,7 @@ public class FeishuConfig {
                                                     } catch (Exception e) {
                                                         log.error("[Feishu] 图片处理失败: {}", imgUrl, e);
                                                         // 降级为链接文本
-                                                        com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement linkElem = new com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement();
+                                                        PostElement linkElem = new PostElement();
                                                         linkElem.setTag("a");
                                                         linkElem.setText("[图片链接]");
                                                         linkElem.setHref(imgUrl);
@@ -209,16 +215,16 @@ public class FeishuConfig {
                                                 // 添加剩余文本
                                                 String tailText = aiResponse.substring(lastIndex);
                                                 if (!tailText.isEmpty()) {
-                                                    com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement textElem = new com.tengjiao.douya.entity.feishu.content.FeishuPostContent.PostElement();
+                                                    PostElement textElem = new PostElement();
                                                     textElem.setTag("text");
                                                     textElem.setText(tailText);
                                                     elements.add(textElem);
                                                 }
 
-                                                postContent.setContent(java.util.Collections.singletonList(elements));
+                                                postContent.setContent(List.of(elements));
 
                                                 // 封装为发送格式 {"zh_cn": ...}
-                                                com.tengjiao.douya.entity.feishu.content.FeishuPostMessageContent sendContent = new com.tengjiao.douya.entity.feishu.content.FeishuPostMessageContent();
+                                                FeishuPostMessageContent sendContent = new FeishuPostMessageContent();
                                                 sendContent.setZhCn(postContent);
 
                                                 feishuService.sendMessage("user_id",

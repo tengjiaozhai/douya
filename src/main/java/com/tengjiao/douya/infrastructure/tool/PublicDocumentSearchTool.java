@@ -6,7 +6,9 @@ import com.tengjiao.douya.infrastructure.vectorstore.UserVectorApp;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
+import com.tengjiao.douya.application.service.evaluator.DocumentEvaluator;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.document.Document;
 
 import java.util.List;
@@ -22,7 +24,15 @@ import java.util.stream.Collectors;
  * @since 2026-01-25
  */
 @Slf4j
-public record PublicDocumentSearchTool(UserVectorApp userVectorApp) {
+public class PublicDocumentSearchTool {
+
+    private final UserVectorApp userVectorApp;
+    private final DocumentEvaluator evaluator;
+
+    public PublicDocumentSearchTool(UserVectorApp userVectorApp, ChatModel chatModel) {
+        this.userVectorApp = userVectorApp;
+        this.evaluator = new DocumentEvaluator(chatModel);
+    }
 
     /**
      * 搜索请求
@@ -47,12 +57,19 @@ public record PublicDocumentSearchTool(UserVectorApp userVectorApp) {
         log.info("[PublicDocTool] 正在检索公共知识库, Query: {}", query);
 
         try {
-            // 调用 UserVectorApp 检索公共文档（无 userId 过滤）
-            List<Document> docs = userVectorApp.searchPublic(query, 5);
+            // 1. 初筛：获取更多候选集 (例如 10 条)
+            List<Document> rawDocs = userVectorApp.searchPublic(query, 10);
 
-            if (docs == null || docs.isEmpty()) {
+            if (rawDocs == null || rawDocs.isEmpty()) {
                 log.info("[PublicDocTool] 未找到与 '{}' 相关的公共文档内容", query);
                 return new Response("未在公共知识库中找到相关信息。");
+            }
+
+            // 2. 评估与重排：取 Top 3
+            List<Document> docs = evaluator.evaluateAndRerank(query, rawDocs, 3);
+
+            if (docs.isEmpty()) {
+                return new Response("虽然初筛有结果，但经评估与您的问题关联度不高。");
             }
 
             // 格式化输出，带上详细元数据
@@ -68,14 +85,19 @@ public record PublicDocumentSearchTool(UserVectorApp userVectorApp) {
                 // 处理图片元数据
                 Object imagesObj = meta.get("images");
                 if (imagesObj instanceof String jsonStr && !jsonStr.isBlank()) {
-                    JSONArray jsonArray = JSON.parseArray(jsonStr);
-
-                    if (jsonArray != null && !jsonArray.isEmpty()) {
-                        sb.append("关联图片地址:\n");
-                        for (int i = 0; i < jsonArray.size(); i++) {
-                            JSONObject img = jsonArray.getJSONObject(i);
-                            sb.append("- ").append(img.getString("ossUrl")).append("\n");
+                    try {
+                        JSONArray jsonArray = JSON.parseArray(jsonStr);
+                        if (jsonArray != null && !jsonArray.isEmpty()) {
+                            sb.append("关联图片:\n");
+                            for (int i = 0; i < jsonArray.size(); i++) {
+                                JSONObject img = jsonArray.getJSONObject(i);
+                                String ossUrl = img.getString("ossUrl");
+                                // 直接转换为 Markdown 图片格式
+                                sb.append("![参考图](").append(ossUrl).append(")\n");
+                            }
                         }
+                    } catch (Exception e) {
+                        log.warn("解析图片元数据失败: {}", jsonStr);
                     }
                 }
                 return sb.toString();

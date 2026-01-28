@@ -133,7 +133,7 @@ public class SupervisorNode implements NodeAction {
             }
         }
 
-        return "FINISH";
+        return "EatingMaster"; // 默认兜底：无法决策时，降级到 EatingMaster
     }
 
     private String extractText(Object msgObj) {
