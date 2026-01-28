@@ -339,8 +339,13 @@ douya
 ### 2026-01-28
 
 - **智能体架构解构与代码优雅化 (Agent Decentralization)**:
-  - **解耦核心类**: 将 `EatingMasterApp` 中原本臃肿的多个 Agent 定义（Prompt、Instruction、Building Logic）彻底剥离，分散到 `com.tengjiao.douya.application.agent` 包下的独立类中。
-  - **基类抽象 (BaseAgent)**: 引入 `BaseAgent` 抽象类，统一封装了 ReactAgent 的构建流水线，支持钩子 (Hooks)、拦截器 (Interceptors) 和工具 (Tools) 的标准化链式注入。
+  - **解耦核心类**: 将 `EatingMasterApp` 中原本臃肿的多个 Agent 定义（Prompt、Instruction、Building Logic）彻底剥离。
+  - **“工作者-格式化器”协作模式 (Worker-Formatter Pattern)**:
+    - **逻辑解耦**: 将“业务检索/推理”与“结果结构化”彻底拆分。`EatingMasterAgent` 等 Worker 回归纯文本模式，全力保障工具调用 (RAG) 的触发频率与推理深度。
+    - **ResponseFormatterAgent**: 新增专项格式化智能体，负责将 Worker 产出的 Markdown 文本统一转换为 `StructuredOutputResult` (Feishu JSON)。
+    - **链路闭合**: 通过 `EatingMasterGraph` 的编排，确保所有业务专家的最终输出都会自动流转至格式化器，实现系统级响应的标准化。
+  - **飞书富文本集成 (Feishu Post Integration)**:
+    - 完美适配 RAG 检索中的 **OSSURL 自动保留** 逻辑。智能体现在能自动将检索到的图片链接封装入富文本结构，并标记为待处理状态。
   - **职责专一化**:
     - `EatingMasterAgent`: 专注于美食专家角色的 Prompt 与工具绑定。
     - `VisionUnderstandAgent`: 专注于视觉感知角色的高密度指令集。

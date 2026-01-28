@@ -167,12 +167,17 @@ public class EatingMasterApp {
                 Collections.emptyList());
         ReactAgent dailyAgent = dailyAgentObj.build();
 
-        PromptRewriterAgent promptRewriterAgentObj = new PromptRewriterAgent(eatingMasterModel,
+        PromptRewriterAgent promptRewriterAgentObj = new PromptRewriterAgent(douBaoTransitDeepseek,
                 Collections.emptyList(),
                 Collections.emptyList(),
                 Collections.emptyList());
         ReactAgent promptRewriterAgent = promptRewriterAgentObj.build();
 
+        ResponseFormatterAgent responseFormatterAgentObj = new ResponseFormatterAgent(eatingMasterModel,
+                Collections.emptyList(),
+                Collections.emptyList(),
+                Collections.emptyList());
+        ReactAgent responseFormatterAgent = responseFormatterAgentObj.build();
 
         // 构建运行配置
         RunnableConfig config = RunnableConfig.builder()
@@ -187,7 +192,8 @@ public class EatingMasterApp {
                 eatingMasterAgent,
                 visionAgent,
                 dailyAgent,
-                promptRewriterAgent, // 新增
+                promptRewriterAgent,
+                responseFormatterAgent, // 新增
                 supervisorSystemPrompt,
                 supervisorInstruction,
                 config);
@@ -213,29 +219,27 @@ public class EatingMasterApp {
 
             if (invoke.isPresent()) {
                 OverAllState state = invoke.get();
-                // 优先尝试获取各子 Agent 的最终输出
-                if (state.data().containsKey("EatingMaster")) {
-                    Object output = state.data().get("EatingMaster");
+                // 核心：优先获取格式化后的结构化输出
+                if (state.data().containsKey("ResponseFormatter")) {
+                    Object output = state.data().get("ResponseFormatter");
                     if (output instanceof AssistantMessage am) {
-                        saveConversationPair(userId, userMessage.getText(), am.getText(), "EatingMaster");
+                        // 这里不再调用 saveConversationPair，或者可以根据需要记录
                         return am.getText();
                     }
                 }
-                if (state.data().containsKey("DailyAssistant")) {
-                    Object output = state.data().get("DailyAssistant");
-                    if (output instanceof AssistantMessage am) {
-                        saveConversationPair(userId, userMessage.getText(), am.getText(), "DailyAssistant");
-                        return am.getText();
+
+                // 备份：如果格式化器失败，尝试获取各子 Agent 的原始输出（为了鲁棒性）
+                String[] agents = {"EatingMaster", "DailyAssistant", "VisionUnderstand"};
+                for (String agent : agents) {
+                    if (state.data().containsKey(agent)) {
+                        Object output = state.data().get(agent);
+                        if (output instanceof AssistantMessage am) {
+                            saveConversationPair(userId, userMessage.getText(), am.getText(), agent);
+                            return am.getText();
+                        }
                     }
                 }
-                if (state.data().containsKey("VisionUnderstand")) {
-                    Object output = state.data().get("VisionUnderstand");
-                    if (output instanceof AssistantMessage am) {
-                        saveConversationPair(userId, userMessage.getText(), am.getText(), "VisionUnderstand");
-                        return am.getText();
-                    }
-                }
-                log.warn("[Multi-Agent] 未找到子Agent的标准输出，返回 State: {}", state.data());
+                log.warn("[Multi-Agent] 未找到任何有效的输出，返回 State: {}", state.data());
                 return "抱歉，我的大脑暂时断片了";
             }
             return "抱歉，我的大脑暂时断片了";

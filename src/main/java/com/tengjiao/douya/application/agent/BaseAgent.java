@@ -26,6 +26,14 @@ public abstract class BaseAgent {
     public abstract String getSystemPrompt();
     public abstract String getInstruction();
 
+    /**
+     * 定义智能体的输出类型。默认为 null (输出为字符串)。
+     * 如果子类重写此方法并返回一个 Class，则输出将自动转换为该类型的结构化数据。
+     */
+    public Class<?> getOutputType() {
+        return null;
+    }
+
     public ReactAgent build() {
         Builder builder = ReactAgent.builder()
             .name(getName())
@@ -34,6 +42,11 @@ public abstract class BaseAgent {
             .systemPrompt(getSystemPrompt())
             .instruction(getInstruction())
             .outputKey(getName());
+
+        Class<?> outputType = getOutputType();
+        if (outputType != null) {
+            builder.outputType(outputType);
+        }
 
         if (tools != null && !tools.isEmpty()) {
             builder.tools(tools.toArray(new ToolCallback[0]));

@@ -67,5 +67,11 @@ public class FeishuPostContent {
         // text 标签的字段
         @SerializedName("un_escape")
         private Boolean unEscape;
+
+        /**
+         * 扩展字段: 用于存储外部图片链接(如 OSS URL)
+         * 在发送前会被转换为 image_key
+         */
+        private String url;
     }
 }
