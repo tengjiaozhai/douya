@@ -336,6 +336,14 @@ douya
 
 ## 更新日志
 
+### 2026-01-29
+
+- **图片链路保留稳定性优化 (Image Asset Preservation)**:
+  - **工具层格式对齐**: 修改 `PublicDocumentSearchTool` 的图片输出格式,从 Markdown 图片语法 `![参考图](url)` 改为显式标签格式 `[图片资产]: ossUrl=https://xxx`,避免 LLM 误认为图片已渲染而将其忽略。
+  - **智能体层指令强化**: 更新 `EatingMasterAgent` 的指令,明确要求智能体主动识别 `[图片资产]: ossUrl=...` 标记,并将其转换为标准 Markdown 图片格式 `![参考图](url)` 插入回复中,强调这是"强制性资产保留任务"。
+  - **格式化器校验**: 确认 `ResponseFormatterAgent` 已具备将 Markdown 图片语法 `![描述](url)` 转换为飞书富文本 `tag: "img"` 节点的能力,确保图片能正确渲染到飞书消息中。
+  - **目标**: 解决 RAG 检索过程中图片链接 (OSSURL) 丢失的问题,确保从工具层到智能体层再到格式化层的完整图片链路保留。
+
 ### 2026-01-28
 
 - **智能体架构解构与代码优雅化 (Agent Decentralization)**:

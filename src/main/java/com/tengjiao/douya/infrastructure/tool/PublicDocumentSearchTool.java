@@ -92,8 +92,8 @@ public class PublicDocumentSearchTool {
                             for (int i = 0; i < jsonArray.size(); i++) {
                                 JSONObject img = jsonArray.getJSONObject(i);
                                 String ossUrl = img.getString("ossUrl");
-                                // 直接转换为 Markdown 图片格式
-                                sb.append("![参考图](").append(ossUrl).append(")\n");
+                                // 使用显式标签格式,便于 LLM 识别和保留
+                                sb.append("[图片资产]: ossUrl=").append(ossUrl).append("\n");
                             }
                         }
                     } catch (Exception e) {

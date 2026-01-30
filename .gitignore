@@ -35,4 +35,5 @@ application-local.yml
 *.png
 *.jpg
 *.jpeg
+*.code-workspace
 
