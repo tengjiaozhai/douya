@@ -3,7 +3,10 @@ package com.tengjiao.douya.application.agent;
 import com.alibaba.cloud.ai.graph.agent.Builder;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.ModelHook;
+import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.alibaba.cloud.ai.graph.agent.interceptor.ModelInterceptor;
+import com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry;
+import com.alibaba.cloud.ai.graph.skills.registry.classpath.ClasspathSkillRegistry;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
 import java.util.List;
@@ -14,17 +17,25 @@ public abstract class BaseAgent {
     protected final List<ModelHook> hooks;
     protected final List<ModelInterceptor> interceptors;
 
-    public BaseAgent(ChatModel model, List<ToolCallback> tools, List<ModelHook> hooks, List<ModelInterceptor> interceptors) {
+    protected final String skillName;
+    protected final SkillsAgentHook agentHook;
+
+    public BaseAgent(String skillName, ChatModel model, List<ToolCallback> tools, List<ModelHook> hooks, List<ModelInterceptor> interceptors, SkillsAgentHook agentHook) {
+        this.skillName = skillName;
         this.model = model;
         this.tools = tools;
         this.hooks = hooks;
         this.interceptors = interceptors;
-    }
 
-    public abstract String getName();
-    public abstract String getDescription();
-    public abstract String getSystemPrompt();
-    public abstract String getInstruction();
+        // Load skill data
+        SkillRegistry registry = ClasspathSkillRegistry.builder()
+            .classpathPath("skills/"+skillName)
+            .build();
+
+        this.agentHook = SkillsAgentHook.builder()
+            .skillRegistry(registry)
+            .build();
+    }
 
     /**
      * 定义智能体的输出类型。默认为 null (输出为字符串)。
@@ -36,12 +47,10 @@ public abstract class BaseAgent {
 
     public ReactAgent build() {
         Builder builder = ReactAgent.builder()
-            .name(getName())
-            .description(getDescription())
+            .name(skillName)
+            .hooks(List.of(agentHook))
             .model(model)
-            .systemPrompt(getSystemPrompt())
-            .instruction(getInstruction())
-            .outputKey(getName());
+            .outputKey(skillName);
 
         Class<?> outputType = getOutputType();
         if (outputType != null) {

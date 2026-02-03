@@ -336,6 +336,12 @@ douya
 
 ## 更新日志
 
+### 2026-02-03
+
+- **Agent 提示词结构化 (Skill-based Prompts)**:
+  - **标准化迁移**: 将 Java 代码 (`EatingMasterAgent`, `DailyAssistantAgent` 等) 中的硬编码 Prompt 和 Instruction 提取为独立的 `.agent/skills/` 目录结构。
+  - **SKILL.md 规范**: 采用 Tutorial 推荐的 Skill 格式建立 `eating-master`, `daily-assistant`, `prompt-rewriter`, `response-formatter`, `vision-understand` 五个标准技能包，便于未来 Python 版本的迁移与复用。
+
 ### 2026-01-29
 
 - **图片链路保留稳定性优化 (Image Asset Preservation)**:
