@@ -20,7 +20,7 @@ public abstract class BaseAgent {
     protected final String skillName;
     protected final SkillsAgentHook agentHook;
 
-    public BaseAgent(String skillName, ChatModel model, List<ToolCallback> tools, List<ModelHook> hooks, List<ModelInterceptor> interceptors, SkillsAgentHook agentHook) {
+    public BaseAgent(String skillName, ChatModel model, List<ToolCallback> tools, List<ModelHook> hooks, List<ModelInterceptor> interceptors) {
         this.skillName = skillName;
         this.model = model;
         this.tools = tools;
