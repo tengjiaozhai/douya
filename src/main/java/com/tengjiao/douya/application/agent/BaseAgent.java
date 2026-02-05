@@ -5,11 +5,15 @@ import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.ModelHook;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.alibaba.cloud.ai.graph.agent.interceptor.ModelInterceptor;
+import com.alibaba.cloud.ai.graph.skills.SkillMetadata;
 import com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry;
 import com.alibaba.cloud.ai.graph.skills.registry.classpath.ClasspathSkillRegistry;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 public abstract class BaseAgent {
     protected final ChatModel model;
@@ -28,10 +32,9 @@ public abstract class BaseAgent {
         this.interceptors = interceptors;
 
         // Load skill data
-        SkillRegistry registry = ClasspathSkillRegistry.builder()
-            .classpathPath("skills/"+skillName)
+        ClasspathSkillRegistry registry = ClasspathSkillRegistry.builder()
+            .classpathPath(skillName)
             .build();
-
         this.agentHook = SkillsAgentHook.builder()
             .skillRegistry(registry)
             .build();

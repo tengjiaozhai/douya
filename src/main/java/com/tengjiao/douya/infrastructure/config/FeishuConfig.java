@@ -38,6 +38,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -161,7 +162,7 @@ public class FeishuConfig {
                                                 FeishuPostContent postContent = new FeishuPostContent();
                                                 postContent.setTitle("");
 
-                                                List<PostElement> elements = new java.util.ArrayList<>();
+                                                List<PostElement> elements = new ArrayList<>();
                                                 int lastIndex = 0;
 
                                                 while (matcher.find()) {
