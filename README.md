@@ -336,6 +336,11 @@ douya
 
 ## 更新日志
 
+### 2026-02-11
+
+- **修复 Agent 技能加载 404 问题**:
+  - **路径标准化**: 修正了 `ClasspathSkillRegistry` 加载技能文件的路径问题。将 `response-formatter`, `prompt-rewriter`, `eating-master` 等智能体的 `SKILL.md` 文件从子目录 `skills/` 移动到各智能体资源目录的根路径下（例如 `src/main/resources/response-formatter/SKILL.md`），确保 Spring 资源加载器能正确通过 `classpath:/agent-name/SKILL.md` 定位到技能定义，解决了 `ResponseFormatterAgent` 报 404 错误的问题。
+
 ### 2026-02-03
 
 - **Agent 提示词结构化 (Skill-based Prompts)**:
