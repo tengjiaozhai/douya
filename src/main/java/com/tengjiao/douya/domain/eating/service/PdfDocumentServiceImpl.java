@@ -4,7 +4,6 @@ import com.tengjiao.douya.domain.eating.model.PdfImageInfo;
 import com.tengjiao.douya.domain.eating.model.PdfProcessResult;
 import com.tengjiao.douya.infrastructure.oss.OssService;
 
-
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
@@ -46,7 +45,7 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
 
     // 文本切分器配置 - 语义化 Parent-Child 策略
     private static final int PARENT_CONTEXT_SIZE = 500; // 侧向扩展的上下文
-    private static final int CHILD_CHUNK_SIZE = 300;   // 子块大小
+    private static final int CHILD_CHUNK_SIZE = 300; // 子块大小
     private static final int CHILD_CHUNK_OVERLAP = 50;
 
     // 图片格式
@@ -93,14 +92,22 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             // 3. 解析文本内容(按页)
             List<PageContent> rawPageContents = extractTextByPage(pdDocument);
 
-            // 4. 数据清洗：剔除页眉页脚、乱码等
-            List<PageContent> pageContents = cleanPageContents(rawPageContents);
+            // 4. 新流程：Filter -> Merge -> Split -> Clean
 
-            // 5. 切分文本(Parent-Child 策略)并关联图片
-            List<Document> documents = splitParentChildAndAssociate(
-                    pageContents,
+            // 4.1 初步去噪 (仅移除页眉页脚)
+            List<PageContent> filteredContents = filterNoise(rawPageContents);
+
+            // 4.2 段落重组 (修复断句)
+            List<PageContent> mergedContents = mergeParagraphs(filteredContents);
+
+            // 4.3 切分文本 (Parent-Child 策略) 并关联图片
+            List<Document> rawDocuments = splitParentChildAndAssociate(
+                    mergedContents,
                     allImages,
                     documentName);
+
+            // 4.4 最终清洗 (对切片后的文本进行规范化)
+            List<Document> documents = cleanChunks(rawDocuments);
 
             log.info("生成了 {} 个文档片段", documents.size());
 
@@ -267,60 +274,184 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
     }
 
     /**
-     * 数据清洗：识别页眉页脚并剔除乱码
+     * 2. 数据清洗第一步：仅剔除明显的页眉页脚噪声，保留原始结构
      */
-    private List<PageContent> cleanPageContents(List<PageContent> pageContents) {
+    private List<PageContent> filterNoise(List<PageContent> pageContents) {
         if (pageContents.isEmpty())
             return pageContents;
 
-        // 1. 低噪声过滤：识别页眉页脚（高频重复行）
+        // 统计行频次，识别页眉页脚
         Map<String, Integer> lineCounts = new HashMap<>();
         for (PageContent pc : pageContents) {
             String[] lines = pc.text().split("\\r?\\n");
             for (String line : lines) {
                 String trimmed = line.trim();
-                if (trimmed.length() > 3) { // 过滤掉太短的行（如页码）
-                    lineCounts.merge(trimmed, 1, (a, b) -> a + b);
+                // 过滤掉太短的行（如页码）但注意不要误伤正文短句
+                if (trimmed.length() > 3) {
+                    lineCounts.merge(trimmed, 1, Integer::sum);
                 }
             }
         }
 
-        // 出现频率极高（如超过 30% 的页面都有）且非正文内容的行
+        // 出现频率极高（如超过 20% 的页面都有）且非正文内容的行
+        // 降低阈值到 20% 以更积极地去除页眉
         Set<String> noiseLines = lineCounts.entrySet().stream()
-                .filter(e -> e.getValue() > pageContents.size() * 0.3)
+                .filter(e -> e.getValue() > pageContents.size() * 0.2)
                 .map(Map.Entry::getKey)
                 .collect(Collectors.toSet());
 
+        // 增加特定的装饰性噪声关键词
+        Set<String> explicitNoise = Set.of("Our Menu", "Recipe", "Ingredients", "Method", "主食谱", "配料", "做法");
+
         return pageContents.stream().map(pc -> {
             String text = pc.text();
-            
-            // 移除高频噪声行
             String[] lines = text.split("\\r?\\n");
             StringBuilder cleanedText = new StringBuilder();
+
             for (String line : lines) {
-                if (!noiseLines.contains(line.trim())) {
-                    cleanedText.append(line).append("\n");
+                String trimmed = line.trim();
+
+                // 1. 移除高频噪声行 (页眉页脚)
+                if (noiseLines.contains(trimmed)) {
+                    continue;
+                }
+
+                // 1.1 移除显式噪声关键词 (仅当行内容完全匹配或者是极短的装饰词)
+                if (explicitNoise.contains(trimmed)
+                        || (trimmed.length() < 20 && explicitNoise.stream().anyMatch(trimmed::contains))) {
+                    continue;
+                }
+
+                // 2. 移除孤立的页码
+                if (trimmed.matches("^\\s*第\\s*\\d+\\s*页.*$") ||
+                        trimmed.matches("^\\s*-\\s*\\d+\\s*-\\s*$") ||
+                        trimmed.matches("^\\s*\\d+\\s*/\\s*\\d+\\s*$") ||
+                        trimmed.matches("^\\s*\\d+\\s*$")) {
+                    continue;
+                }
+
+                cleanedText.append(line).append("\n");
+            }
+            return new PageContent(pc.pageNumber(), cleanedText.toString());
+        }).collect(Collectors.toList());
+    }
+
+    /**
+     * 3. 结构重组：合并被硬换行打断的段落
+     * 优化：增加了对目录、列表项、短语标题的保护，防止错误合并
+     */
+    private List<PageContent> mergeParagraphs(List<PageContent> pageContents) {
+        return pageContents.stream().map(pc -> {
+            String text = pc.text();
+            String[] lines = text.split("\\n");
+            StringBuilder mergedText = new StringBuilder();
+
+            for (int i = 0; i < lines.length; i++) {
+                String line = lines[i].trim();
+                if (line.isEmpty()) {
+                    // 保留空行作为段落分隔符 (将连续空行归一化为双换行)
+                    if (mergedText.length() > 0 && mergedText.charAt(mergedText.length() - 1) != '\n') {
+                        mergedText.append("\n\n");
+                    }
+                    continue;
+                }
+
+                mergedText.append(line);
+
+                // 瞻前：获取下一行内容以辅助判断
+                String nextLine = (i + 1 < lines.length) ? lines[i + 1].trim() : "";
+
+                // 核心逻辑：判断是否需要合并下一行
+                if (shouldMerge(line, nextLine)) {
+                    mergedText.append(" ");
+                } else {
+                    mergedText.append("\n");
                 }
             }
-            text = cleanedText.toString();
+            // 确保页面最后有换行
+            if (mergedText.length() > 0 && mergedText.charAt(mergedText.length() - 1) != '\n') {
+                mergedText.append("\n");
+            }
 
-            // 2. 正则清洗：移除页码、乱码、连续符号
-            // 移除孤立的页码（如 " - 1 - ", " 1 / 10 ", "Page 1"）
-            text = text.replaceAll("(?m)^\\s*第\\s*\\d+\\s*页.*$", "");
-            text = text.replaceAll("(?m)^\\s*-\\s*\\d+\\s*-\\s*$", "");
-            text = text.replaceAll("(?m)^\\s*\\d+\\s*/\\s*\\d+\\s*$", "");
-            
-            // 移除 ASCII 控制字符
-            text = text.replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]", "");
-            
-            // 规范化空白字符，但保留至少一个换行以维持结构
-            text = text.replaceAll("[^\\S\\r\\n]{2,}", " "); 
-            
-            // 移除过多的连续空行
-            text = text.replaceAll("\\n{3,}", "\n\n");
-
-            return new PageContent(pc.pageNumber(), text.trim());
+            return new PageContent(pc.pageNumber(), mergedText.toString());
         }).collect(Collectors.toList());
+    }
+
+    /**
+     * 判断是否应该合并下一行
+     * 只有当当前行看起来像是句子中间断开，且下一行不是新的列表项时，才合并
+     */
+    private boolean shouldMerge(String line, String nextLine) {
+        // 1. 如果当前行已经是句末，不合并
+        if (isSentenceEnd(line))
+            return false;
+
+        // 2. 目录保护：如果行尾是数字 (Page xx)，视为目录项，不合并
+        if (isTableOfContentsItem(line))
+            return false;
+
+        // 3. 列表/标题保护：如果当前行太短 (<20字符)，视为标签/标题/配料，不合并
+        if (isShortLine(line))
+            return false;
+
+        // 4. 下一行列表保护：如果下一行看起来像是列表项 (1. / - / •)，不合并
+        if (isListItem(nextLine))
+            return false;
+
+        return true;
+    }
+
+    private boolean isSentenceEnd(String line) {
+        if (line.isEmpty())
+            return false;
+        char lastChar = line.charAt(line.length() - 1);
+        return lastChar == '。' || lastChar == '！' || lastChar == '？' ||
+                lastChar == '.' || lastChar == '!' || lastChar == '?';
+    }
+
+    private boolean isTableOfContentsItem(String line) {
+        return line.matches(".*\\s+\\d+$");
+    }
+
+    private boolean isListItem(String line) {
+        return line.matches("^(\\d+\\.|[a-zA-Z]\\.|-|•|\\*|\\d+).*");
+    }
+
+    private boolean isShortLine(String line) {
+        return line.length() < 20;
+    }
+
+    /**
+     * 5. 切分后清洗：对最终生成的 Document 进行细粒度清洗
+     */
+    private List<Document> cleanChunks(List<Document> documents) {
+        return documents.stream().map(doc -> {
+            String cleanedText = deepClean(doc.getText());
+
+            Map<String, Object> metadata = new HashMap<>(doc.getMetadata());
+            if (metadata.containsKey("parent_text")) {
+                String parentText = (String) metadata.get("parent_text");
+                metadata.put("parent_text", deepClean(parentText));
+            }
+
+            return Document.builder()
+                    .id(doc.getId())
+                    .text(cleanedText)
+                    .metadata(metadata)
+                    .build();
+        }).collect(Collectors.toList());
+    }
+
+    private String deepClean(String text) {
+        if (text == null)
+            return "";
+        // 移除 ASCII 控制字符
+        text = text.replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]", "");
+        // 规范化空白字符 (将连续空格合并，但保留换行结构)
+        text = text.replaceAll("[^\\S\\r\\n]{2,}", " ");
+        // 移除过多的连续空行 (保留段落结构 \n\n)
+        text = text.replaceAll("\\n{3,}", "\n\n");
+        return text.trim();
     }
 
     /**
@@ -332,7 +463,7 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             String documentName) {
 
         List<Document> resultDocuments = new ArrayList<>();
-        
+
         // 1. 合并全文并记录页码边界
         StringBuilder fullText = new StringBuilder();
         TreeMap<Integer, Integer> offsetToPageMap = new TreeMap<>();
@@ -344,7 +475,7 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
         // 2. 语义化递归切分 (优先切分段落、句子)
         // 此处模拟 RecursiveCharacterTextSplitter 逻辑
         List<String> childTexts = recursiveSplit(fullText.toString(), CHILD_CHUNK_SIZE, CHILD_CHUNK_OVERLAP);
-        
+
         // 3. 预分组图片
         Map<Integer, List<Map<String, Object>>> imagesByPage = allImages.stream()
                 .collect(Collectors.groupingBy(PdfImageInfo::getPageNumber,
@@ -356,17 +487,18 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
         int currentSearchOffset = 0;
         for (int i = 0; i < childTexts.size(); i++) {
             String childText = childTexts.get(i);
-            
+
             // 确定子块所在的原文位置（由于 Splitter 的特性，需向后搜索）
             int startOffset = fullText.indexOf(childText, currentSearchOffset);
-            if (startOffset == -1) startOffset = currentSearchOffset; // 降级处理
+            if (startOffset == -1)
+                startOffset = currentSearchOffset; // 降级处理
             int endOffset = startOffset + childText.length();
             currentSearchOffset = startOffset + (childText.length() / 2); // 移动搜索起点
 
             // 确定涉及的页码
             Integer startPage = offsetToPageMap.floorEntry(startOffset).getValue();
             Integer endPage = offsetToPageMap.floorEntry(Math.max(0, endOffset - 1)).getValue();
-            
+
             // 4. 构建 Parent Context (在子块前后扩展一定范围)
             int parentStart = Math.max(0, startOffset - PARENT_CONTEXT_SIZE);
             int parentEnd = Math.min(fullText.length(), endOffset + PARENT_CONTEXT_SIZE);
@@ -386,7 +518,7 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             metadata.put("timestamp", Instant.now().toString());
             metadata.put("is_child", true);
             metadata.put("parent_text", parentText);
-            
+
             if (!associatedImages.isEmpty()) {
                 metadata.put("images", associatedImages);
             }
@@ -396,7 +528,7 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
                     .text(childText)
                     .metadata(metadata)
                     .build();
-            
+
             resultDocuments.add(doc);
         }
 
@@ -408,14 +540,16 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
      */
     private List<String> recursiveSplit(String text, int limit, int overlap) {
         List<String> chunks = new ArrayList<>();
-        if (text == null || text.trim().isEmpty()) return chunks;
+        if (text == null || text.trim().isEmpty())
+            return chunks;
 
-        String[] separators = {"\n\n", "\n", "。", "！", "？", ". ", " "};
+        String[] separators = { "\n\n", "\n", "。", "！", "？", ". ", " " };
         recursiveAction(text, limit, overlap, separators, 0, chunks);
         return chunks;
     }
 
-    private void recursiveAction(String text, int limit, int overlap, String[] separators, int sepIdx, List<String> chunks) {
+    private void recursiveAction(String text, int limit, int overlap, String[] separators, int sepIdx,
+            List<String> chunks) {
         if (text.length() <= limit) {
             chunks.add(text);
             return;
@@ -426,14 +560,15 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             for (int i = 0; i < text.length(); i += (limit - overlap)) {
                 int end = Math.min(i + limit, text.length());
                 chunks.add(text.substring(i, end));
-                if (end == text.length()) break;
+                if (end == text.length())
+                    break;
             }
             return;
         }
 
         String sep = separators[sepIdx];
         String[] parts = text.split("(?<=" + Pattern.quote(sep) + ")"); // 使用正向后瞻保留分隔符
-        
+
         StringBuilder current = new StringBuilder();
         for (String part : parts) {
             if (current.length() + part.length() > limit) {
@@ -444,7 +579,7 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
                     String overlapText = current.substring(overlapStart);
                     current = new StringBuilder(overlapText);
                 }
-                
+
                 // 如果单部分就超过了 limit，继续递归
                 if (part.length() > limit) {
                     recursiveAction(part, limit, overlap, separators, sepIdx + 1, chunks);

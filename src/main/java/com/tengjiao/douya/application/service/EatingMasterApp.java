@@ -25,6 +25,8 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.content.Media;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
+import org.springframework.ai.tool.metadata.DefaultToolMetadata;
+import org.springframework.ai.tool.support.ToolUtils;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 import com.alibaba.cloud.ai.graph.store.StoreItem;
@@ -145,6 +147,7 @@ public class EatingMasterApp {
                 publicDocTool::search)
                 .description("检索系统公共知识库、官方手册、菜谱指南或操作说明。当用户询问专业知识、公共资源或需要查找带图片的官方资料时使用。")
                 .inputType(PublicDocumentSearchTool.Request.class)
+                .toolMetadata(DefaultToolMetadata.builder().returnDirect(true).build())
                 .build();
 
         // 创建用户偏好注入拦截器 (由 userId 驱动)
