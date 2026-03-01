@@ -501,6 +501,98 @@ douya
    - **清洗先行**: 切分前自动剔除重复页眉页脚及控制字符干扰。
    - **检索端自动扩展**: 系统在检索时若命中子块，会自动从元数据提取 `parent_text` 替换原始内容，并进行智能去重，解决“精准检索 vs 丰富上下文”的矛盾。
 
+---
+
+### 父子切块深度设计 (Parent-Child Chunking Architecture)
+
+#### 设计动机
+
+RAG 检索面临固有矛盾：
+
+| 问题 | 原因 | 影响 |
+|:---|:---|:---|
+| **块太大** → 检索噪声大 | 向量相似度被大量无关内容稀释 | 召回精度下降，LLM 受噪声干扰 |
+| **块太小** → 上下文不足 | 命中片段语义孤立，缺乏完整背景 | LLM 生成回答质量低，易断章取义 |
+
+**父子切块**通过"小块检索、大块注入"的分离策略，同时解决召回精度与上下文丰富度两个核心问题。
+
+#### 双层切分架构
+
+```
+原始文档（全文）
+        │
+        ▼
+┌─────────────────────┐
+│   预清洗 (Filter)    │  剔除页眉页脚、修正换行、去除 ASCII 乱码
+└─────────┬───────────┘
+          │
+          ▼
+┌─────────────────────┐
+│   Parent 切分        │  1200 tokens / 200 tokens 重叠
+│   (大块 - 语义单元)  │  保留完整的段落、步骤、配料表等上下文
+└─────────┬───────────┘
+          │  每个 Parent 块 → 继续二次切分
+          ▼
+┌─────────────────────┐
+│   Child 切分         │  200 tokens / 50 tokens 重叠
+│   (小块 - 检索单元)  │  精细定位关键语义，提升向量相似度
+└─────────┬───────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────┐
+│  向量化存储 (Chroma)                         │
+│  Child 向量入库，元数据中携带 parent_text     │
+└─────────────────────────────────────────────┘
+```
+
+#### 切分参数说明
+
+| 层级 | Token 大小 | 重叠 | 作用 | 存储位置 |
+|:---|:---:|:---:|:---|:---|
+| **Parent** | 1200 | 200 | 提供完整语义上下文，注入 LLM | 作为 `parent_text` 存入子块元数据 |
+| **Child** | 200 | 50 | 高精度向量检索，捕捉细粒度语义 | 向量化入 Chroma，作为检索索引 |
+
+#### 检索端自动上下文扩展（Small-to-Big Retrieval）
+
+```
+用户输入 Query
+     │
+     ▼
+向量检索 Child Chunks（高精度命中）
+     │
+     ▼
+命中子块 → 从元数据读取 parent_text
+     │
+     ├── 智能去重（同一个 Parent 被多个 Child 命中时合并）
+     │
+     ▼
+将 Parent 大块注入 LLM 上下文
+（精准命中 + 丰富上下文，两全其美）
+```
+
+核心代码逻辑（`UserVectorApp.searchSimilar`）：
+
+```java
+// 1. 向量检索命中子块
+List<Document> childDocs = vectorStore.similaritySearch(request);
+
+// 2. 自动扩展为父块上下文（Small-to-Big）
+List<String> contexts = childDocs.stream()
+    .map(doc -> {
+        // 优先使用 parent_text，退而使用 child 内容本身
+        String parentText = (String) doc.getMetadata().get("parent_text");
+        return parentText != null ? parentText : doc.getContent();
+    })
+    // 智能去重：同一 parent 被多个 child 命中时只保留一份
+    .distinct()
+    .collect(Collectors.toList());
+
+// 3. 将宏观上下文注入 LLM
+return contexts;
+```
+
+---
+
 4. **向量化存储**:
 
    - 集成 Chroma 向量数据库
@@ -621,6 +713,13 @@ documents/
 ```
 
 
+### 2026-02-26
+
+- **父子切块架构深度文档化 (Parent-Child Chunking Documentation)**:
+  - 新增"父子切块深度设计"独立章节，系统阐述双层切分的设计动机、架构图、参数说明及检索端 Small-to-Big 自动扩展逻辑。
+  - 明确了 Child（200 tokens）作为向量检索单元、Parent（1200 tokens）作为 LLM 上下文注入单元的职责分离策略。
+  - 补充了核心代码示例，说明 `UserVectorApp.searchSimilar` 如何在命中子块后自动提取 `parent_text` 并进行智能去重，从架构层面解决"精准检索 vs 丰富上下文"的根本矛盾。
+
 ### 2026-02-18
 
 - **PDF 切片质量深度优化 (Chunking Optimization)**:
@@ -631,5 +730,193 @@ documents/
     - **短句保护**: 对标题和小节头（<20字符）进行独立行保护，提升语义边界清晰度。
   - **噪声清洗增强**: 引入基于频次的动态噪声过滤（阈值降至 20%）与显式关键词过滤（如 "Our Menu"），有效去除页眉页脚残留。
   - **效果**: 在食谱类复杂排版 PDF 中，切片质量评分从 4/10 提升至 8/10，完美保留了配料表与目录的语义结构。
+
+## PageIndexRAG 方案（v1）
+
+本节定义后续 `pageIndexRag` 的统一实现方案。目标是构建“页级可追溯、高召回、低幻觉”的 RAG 系统，优先支持中文 PDF 与多页长文档。
+
+### 1. 设计目标
+
+1. `Page-first`：以页面 (`page`) 为主索引实体，答案必须可回溯到页码。
+2. `Hybrid Retrieval`：向量检索 + BM25 稀疏检索融合，降低漏召回。
+3. `Small-to-Big`：子块召回，父页返回，兼顾精度与上下文完整性。
+4. `Rerank First`：召回后重排，保证最终上下文质量。
+5. `Production Ready`：支持增量更新、版本控制、权限过滤与评测闭环。
+
+### 2. 数据模型（强约束）
+
+1. `document`：`doc_id`、`doc_name`、`version`、`acl`、`created_at`
+2. `page`：`page_id`、`doc_id`、`page_no`、`page_text`、`page_summary`、`keywords`
+3. `chunk`：`chunk_id`、`page_id`、`chunk_no`、`offset_start`、`offset_end`、`chunk_text`
+4. `chunk_index`：`dense_vector`、`sparse_terms`、`token_count`
+5. `citation`：回答引用结构 `doc_id + page_no + chunk_id`
+
+### 3. 默认参数（首版）
+
+| 模块 | 参数 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| 文本切分 | `child_chunk_size` | `320 tokens` | 子块用于检索 |
+| 文本切分 | `child_overlap` | `64 tokens` | 防止边界信息丢失 |
+| 文本切分 | `parent_unit` | `page` | 父级上下文单位固定为页 |
+| 召回 | `dense_top_k` | `60` | 向量召回候选 |
+| 召回 | `sparse_top_k` | `60` | BM25 召回候选 |
+| 融合 | `fusion` | `RRF(k=60)` | 稳定融合策略 |
+| 聚合 | `page_pool_size` | `20` | chunk 聚合后的候选页数量 |
+| 邻页扩展 | `neighbor_window` | `1` | 命中页前后各扩展 1 页 |
+| 重排 | `rerank_top_k` | `10` | 进入生成阶段的页数 |
+| 重排 | `rerank_model` | `bge-reranker-v2-m3` | 可替换同级模型 |
+| 生成 | `max_context_pages` | `8` | 最终上下文页上限 |
+| 生成 | `max_context_tokens` | `6000` | 上下文总 token 上限 |
+| 答案 | `citation_required` | `true` | 无引用时触发拒答/降级 |
+| 过滤 | `min_score_threshold` | `0.22` | 低质量召回过滤 |
+
+### 4. 查询流程（Pipeline）
+
+1. Query 预处理：拼写归一、意图分类（事实问答/流程问答/总结）。
+2. 并行召回：Dense + Sparse 并行检索子块。
+3. 融合去重：RRF 融合，按 `chunk_id/page_id` 去重。
+4. 页级聚合：按 `page_id` 汇总分数，形成候选页。
+5. 邻页扩展：按 `neighbor_window` 补充上下文页。
+6. Rerank：对 `query + page_summary + top_chunks` 进行交叉编码重排。
+7. Context Builder：按“高相关在前、补充在后”的顺序拼装上下文。
+8. Generation：输出答案并附带 `doc/page/chunk` 引用。
+
+### 5. 工程接口建议（面向实现）
+
+1. `POST /api/rag/page-index/ingest`：文档入库，返回 `doc_id/version`
+2. `POST /api/rag/page-index/query`：检索与问答
+3. `GET /api/rag/page-index/doc/{docId}/status`：索引状态
+4. `POST /api/rag/page-index/reindex`：增量重建
+5. `POST /api/rag/page-index/eval/run`：离线评测任务
+
+建议统一返回结构：
+
+```json
+{
+  "answer": "......",
+  "citations": [
+    {"docId": "d1", "pageNo": 12, "chunkId": "c12-03"}
+  ],
+  "debug": {
+    "retrievedChunks": 120,
+    "candidatePages": 20,
+    "rerankPages": 10
+  }
+}
+```
+
+### 6. 评测指标（上线门槛）
+
+1. 检索层：`Recall@20 >= 0.85`，`MRR@10 >= 0.70`
+2. 生成层：引用命中率 `>= 0.95`，无引用回答率 `<= 0.03`
+3. 性能层：`P95 <= 2.5s`（不含超长文档首次入库）
+4. 成本层：单次查询 token 成本可观测、可限流
+
+### 7. Java + Python 目录重构方案（不破坏现有功能）
+
+为便于后续使用 Python 实现检索链路，同时保留现有 Java 服务，采用单仓多运行时布局：
+
+```text
+douya/
+├── apps/
+│   ├── java-server/                  # 现有 Spring Boot 服务（逐步迁移）
+│   └── python-rag/                   # 新增：PageIndexRAG 服务（FastAPI/CLI）
+├── libs/
+│   ├── rag-schema/                   # 共享 DTO/JSON Schema/提示词模板
+│   └── eval-dataset/                 # 评测集与标注
+├── docs/
+│   ├── architecture/page-index-rag.md
+│   └── runbooks/reindex.md
+└── README.md
+```
+
+落地策略：
+
+1. 第一步：保留当前 Maven 工程不动，在仓库新增 `apps/python-rag`。
+2. 第二步：将 `pageIndexRag` 检索链路优先放到 Python，实现快迭代。
+3. 第三步：Java 通过 HTTP/gRPC 调用 Python RAG，逐步抽象共享协议到 `libs/rag-schema`。
+4. 第四步：稳定后按边界决定是否回迁到 Java 或维持双栈。
+
+### 8. Python 实现建议（首选）
+
+1. 框架：`FastAPI + Pydantic + Uvicorn`
+2. 检索：`Qdrant (dense+sparse) + BM25 + RRF`
+3. 重排：`bge-reranker-v2-m3` 或同级 API 化模型
+4. 任务：`Celery/RQ` 处理大文档异步入库
+5. 配置：`.env + pydantic-settings`，区分 `dev/staging/prod`
+
+### 9. 实施里程碑
+
+1. `M1`（1 周）：完成页级数据模型 + ingest + hybrid 检索最小闭环
+2. `M2`（1 周）：接入 rerank + 引用输出 + 邻页扩展
+3. `M3`（1 周）：完成评测集与指标看板，按阈值调参
+4. `M4`（1 周）：灰度上线与压测优化（缓存、并发、限流）
+
+### 10. 当前实现状态（2026-03-01）
+
+已完成 `M1` 最小可运行版本，代码路径：`apps/python-rag`。
+
+已实现接口：
+
+1. `POST /api/rag/page-index/ingest`
+2. `POST /api/rag/page-index/query`
+3. `GET /api/rag/page-index/status`
+4. `GET /health`
+
+使用 conda 启动：
+
+```bash
+cd apps/python-rag
+conda env create -f environment.yml
+conda activate douya-page-index-rag
+./scripts/run_dev.sh
+```
+
+说明：
+
+1. M1 使用本地 JSON 存储索引（便于快速验证）。
+2. M1 回答为检索拼接结果，已包含 citation 结构。
+3. M2 已接入可选 Qdrant 混合检索（通过环境变量开启，失败自动回退本地检索）。
+4. M2 已接入可选 reranker provider（默认 lexical，可切换 BGE，依赖缺失自动降级）。
+5. M2 已接入可选生成器 provider（默认 extractive，可切换 OpenAI-compatible，失败自动降级）。
+
+### 11. Java -> Python PageIndexRAG 代理（已实现）
+
+为保持当前 Spring Boot 主服务为统一入口，已增加 Java 侧代理接口转发到 Python `apps/python-rag` 服务。
+
+Java 侧接口（统一走当前服务 `:8787/api`）：
+
+1. `GET /api/douya/page-index-rag/status`
+2. `POST /api/douya/page-index-rag/ingest`
+3. `POST /api/douya/page-index-rag/query`
+
+配置（`application-dev.yml`）：
+
+```yaml
+page-index-rag:
+  enabled: true
+  base-url: http://127.0.0.1:9000
+  connect-timeout: 3s
+  read-timeout: 30s
+```
+
+联调顺序建议：
+
+1. 先启动 Python 服务（`apps/python-rag`，默认 `9000`）
+2. 再启动 Java 服务（当前项目，默认 `8787`）
+3. 通过 Java 代理接口发起请求，便于后续统一鉴权、审计和流量治理
+
+### 12. EatingMaster `public_search` 接入 PageIndexRAG（已实现）
+
+在保持现有 Supervisor 路由与工具名不变的前提下，已将 `EatingMasterApp` 的 `public_search` 工具升级为可切换模式：
+
+1. `page-index-rag.enabled=true`：`public_search` -> Python PageIndexRAG（页级引用可追溯）
+2. `page-index-rag.enabled=false`：`public_search` -> 旧版 `PublicDocumentSearchTool`（本地向量检索）
+
+该改造为最小侵入方案，特点：
+
+1. 不改 Supervisor 提示词，不新增工具名，避免路由回归风险
+2. 在应用启动与调用阶段增加路由日志，便于排查检索命中与降级路径
+3. 保持当前 Agent 图结构稳定，仅替换工具实现
 
 ## 开发者

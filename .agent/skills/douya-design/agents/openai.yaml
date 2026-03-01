@@ -1,0 +1,4 @@
+interface:
+  display_name: "Douya Architecture Designer"
+  short_description: "Design and evolve Douya agent architecture workflows"
+  default_prompt: "Use $douya-design to design or troubleshoot a Douya architecture change with concrete code-level steps."

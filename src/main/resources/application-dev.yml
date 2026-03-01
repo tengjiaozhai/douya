@@ -51,3 +51,9 @@ aliyun:
         access-key-id: ${ALIYUN_OSS_ACCESS_KEY_ID:your-access-key-id}
         access-key-secret: ${ALIYUN_OSS_ACCESS_KEY_SECRET:your-access-key-secret}
         bucket-name: ${ALIYUN_OSS_BUCKET_NAME:your-bucket-name}
+
+page-index-rag:
+    enabled: true
+    base-url: http://127.0.0.1:9000
+    connect-timeout: 3s
+    read-timeout: 30s
