@@ -2,7 +2,11 @@ package com.tengjiao.douya.domain.eating.service;
 
 import com.tengjiao.douya.domain.eating.model.PdfImageInfo;
 import com.tengjiao.douya.domain.eating.model.PdfProcessResult;
+import com.tengjiao.douya.domain.eating.model.PdfSplitOptions;
+import com.tengjiao.douya.domain.eating.model.DocumentSplitStrategy;
+import com.tengjiao.douya.infrastructure.config.DocumentSplitProperties;
 import com.tengjiao.douya.infrastructure.oss.OssService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,10 +29,14 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -42,6 +50,8 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
 
     private final OssService ossService;
     private final VectorStore chromaVectorStore;
+    private final DocumentSplitProperties documentSplitProperties;
+    private final ObjectMapper objectMapper;
 
     // 文本切分器配置 - 语义化 Parent-Child 策略
     private static final int PARENT_CONTEXT_SIZE = 500; // 侧向扩展的上下文
@@ -56,8 +66,17 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
     public CompletableFuture<PdfProcessResult> processPdfDocumentAsync(
             InputStream pdfInputStream,
             String documentName) {
+        return processPdfDocumentAsync(pdfInputStream, documentName, PdfSplitOptions.defaults());
+    }
+
+    @Override
+    @Async
+    public CompletableFuture<PdfProcessResult> processPdfDocumentAsync(
+            InputStream pdfInputStream,
+            String documentName,
+            PdfSplitOptions options) {
         try {
-            PdfProcessResult result = processPdfDocument(pdfInputStream, documentName);
+            PdfProcessResult result = processPdfDocument(pdfInputStream, documentName, options);
             return CompletableFuture.completedFuture(result);
         } catch (Exception e) {
             log.error("异步处理 PDF 文档失败: {}", documentName, e);
@@ -74,10 +93,20 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
     public PdfProcessResult processPdfDocument(
             InputStream pdfInputStream,
             String documentName) {
+        return processPdfDocument(pdfInputStream, documentName, PdfSplitOptions.defaults());
+    }
+
+    @Override
+    public PdfProcessResult processPdfDocument(
+            InputStream pdfInputStream,
+            String documentName,
+            PdfSplitOptions options) {
 
         log.info("开始处理 PDF 文档: {}", documentName);
 
         try {
+            DocumentSplitStrategy splitStrategy = resolveStrategy(options);
+            log.info("PDF 切分策略: {}", splitStrategy);
             // 1. 加载 PDF 文档
             byte[] pdfBytes = pdfInputStream.readAllBytes();
             PDDocument pdDocument = Loader.loadPDF(pdfBytes);
@@ -101,10 +130,10 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             List<PageContent> mergedContents = mergeParagraphs(filteredContents);
 
             // 4.3 切分文本 (Parent-Child 策略) 并关联图片
-            List<Document> rawDocuments = splitParentChildAndAssociate(
-                    mergedContents,
-                    allImages,
-                    documentName);
+            List<Document> rawDocuments = switch (splitStrategy) {
+                case PYTHON -> splitWithPythonOrFallback(mergedContents, allImages, documentName);
+                case JAVA -> splitParentChildAndAssociate(mergedContents, allImages, documentName);
+            };
 
             // 4.4 最终清洗 (对切片后的文本进行规范化)
             List<Document> documents = cleanChunks(rawDocuments);
@@ -141,6 +170,112 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
                     .errorMessage(e.getMessage())
                     .build();
         }
+    }
+
+    private DocumentSplitStrategy resolveStrategy(PdfSplitOptions options) {
+        if (options != null && options.getStrategy() != null) {
+            return options.getStrategy();
+        }
+        return documentSplitProperties.getDefaultStrategy();
+    }
+
+    private List<Document> splitWithPythonOrFallback(
+            List<PageContent> pageContents,
+            List<PdfImageInfo> allImages,
+            String documentName) {
+        try {
+            return splitWithPython(pageContents, allImages, documentName);
+        } catch (Exception e) {
+            log.warn("Python 切分失败，回退到 JAVA 切分: {}", e.getMessage(), e);
+            return splitParentChildAndAssociate(pageContents, allImages, documentName);
+        }
+    }
+
+    private List<Document> splitWithPython(
+            List<PageContent> pageContents,
+            List<PdfImageInfo> allImages,
+            String documentName) throws Exception {
+        PythonSplitRequest request = new PythonSplitRequest(
+                pageContents.stream().map(p -> new PythonPage(p.pageNumber(), p.text())).toList(),
+                CHILD_CHUNK_SIZE,
+                CHILD_CHUNK_OVERLAP,
+                PARENT_CONTEXT_SIZE);
+
+        Path scriptPath = Path.of(documentSplitProperties.getPythonScript());
+        if (!scriptPath.isAbsolute()) {
+            scriptPath = Path.of(System.getProperty("user.dir")).resolve(scriptPath).normalize();
+        }
+        if (!Files.exists(scriptPath)) {
+            throw new IllegalStateException("Python 切分脚本不存在: " + scriptPath);
+        }
+
+        ProcessBuilder processBuilder = new ProcessBuilder(
+                documentSplitProperties.getPythonCommand(),
+                scriptPath.toString(),
+                "--mode",
+                "json-stdin");
+        Process process = processBuilder.start();
+
+        try (var outputStream = process.getOutputStream()) {
+            objectMapper.writeValue(outputStream, request);
+            outputStream.flush();
+        }
+
+        boolean finished = process.waitFor(documentSplitProperties.getPythonTimeoutSeconds(), TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            throw new IllegalStateException("Python 切分超时");
+        }
+
+        String stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        String stderr = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+        if (process.exitValue() != 0) {
+            throw new IllegalStateException("Python 切分进程失败: " + stderr);
+        }
+
+        PythonSplitResponse response = objectMapper.readValue(stdout, PythonSplitResponse.class);
+        if (response == null || response.chunks() == null || response.chunks().isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        Map<Integer, List<Map<String, Object>>> imagesByPage = allImages.stream()
+                .collect(Collectors.groupingBy(PdfImageInfo::getPageNumber,
+                        Collectors.mapping(img -> Map.of(
+                                "fileName", (Object) img.getFileName(),
+                                "ossUrl", img.getOssUrl(),
+                                "pageNumber", img.getPageNumber()), Collectors.toList())));
+
+        List<Document> documents = new ArrayList<>(response.chunks().size());
+        int index = 0;
+        for (PythonChunk chunk : response.chunks()) {
+            index++;
+            int startPage = Math.max(1, chunk.startPage());
+            int endPage = Math.max(startPage, chunk.endPage());
+            List<Map<String, Object>> associatedImages = new ArrayList<>();
+            for (int p = startPage; p <= endPage; p++) {
+                associatedImages.addAll(imagesByPage.getOrDefault(p, Collections.emptyList()));
+            }
+
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("documentName", documentName);
+            metadata.put("pageNumber", startPage == endPage ? String.valueOf(startPage) : startPage + "-" + endPage);
+            metadata.put("childIndex", index);
+            metadata.put("timestamp", Instant.now().toString());
+            metadata.put("is_child", true);
+            metadata.put("parent_text", chunk.parentText());
+            metadata.put("splitStrategy", "PYTHON");
+            if (!associatedImages.isEmpty()) {
+                metadata.put("images", associatedImages);
+            }
+
+            documents.add(Document.builder()
+                    .id(UUID.randomUUID().toString())
+                    .text(chunk.text())
+                    .metadata(metadata)
+                    .build());
+        }
+
+        return documents;
     }
 
     private List<PdfImageInfo> extractAndUploadImages(PDDocument document, String documentName) {
@@ -518,6 +653,7 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             metadata.put("timestamp", Instant.now().toString());
             metadata.put("is_child", true);
             metadata.put("parent_text", parentText);
+            metadata.put("splitStrategy", "JAVA");
 
             if (!associatedImages.isEmpty()) {
                 metadata.put("images", associatedImages);
@@ -616,5 +752,25 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
      * 页面内容记录
      */
     private record PageContent(int pageNumber, String text) {
+    }
+
+    private record PythonPage(int pageNumber, String text) {
+    }
+
+    private record PythonSplitRequest(
+            List<PythonPage> pages,
+            int childChunkSize,
+            int childChunkOverlap,
+            int parentContextSize) {
+    }
+
+    private record PythonChunk(
+            String text,
+            int startPage,
+            int endPage,
+            String parentText) {
+    }
+
+    private record PythonSplitResponse(List<PythonChunk> chunks) {
     }
 }

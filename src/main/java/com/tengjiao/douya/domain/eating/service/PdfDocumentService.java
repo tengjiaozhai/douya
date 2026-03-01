@@ -1,8 +1,7 @@
 package com.tengjiao.douya.domain.eating.service;
 
 import com.tengjiao.douya.domain.eating.model.PdfProcessResult;
-
-
+import com.tengjiao.douya.domain.eating.model.PdfSplitOptions;
 
 import java.io.InputStream;
 import java.util.concurrent.CompletableFuture;
@@ -14,23 +13,31 @@ public interface PdfDocumentService {
 
     /**
      * 异步处理 PDF 文档:解析、切分、向量化
-     * 
-     * @param pdfInputStream PDF 文件输入流
-     * @param documentName   文档名称
-     * @return 处理结果的 Future
      */
     CompletableFuture<PdfProcessResult> processPdfDocumentAsync(
             InputStream pdfInputStream,
             String documentName);
 
     /**
+     * 异步处理 PDF 文档:解析、切分、向量化（可指定切分策略）
+     */
+    CompletableFuture<PdfProcessResult> processPdfDocumentAsync(
+            InputStream pdfInputStream,
+            String documentName,
+            PdfSplitOptions options);
+
+    /**
      * 同步处理 PDF 文档(用于小文档)
-     * 
-     * @param pdfInputStream PDF 文件输入流
-     * @param documentName   文档名称
-     * @return 处理结果
      */
     PdfProcessResult processPdfDocument(
             InputStream pdfInputStream,
             String documentName);
+
+    /**
+     * 同步处理 PDF 文档(用于小文档，可指定切分策略)
+     */
+    PdfProcessResult processPdfDocument(
+            InputStream pdfInputStream,
+            String documentName,
+            PdfSplitOptions options);
 }

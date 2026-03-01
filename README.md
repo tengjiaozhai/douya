@@ -42,6 +42,14 @@ spring:
 feishu:
   app-id: <YOUR_FEISHU_APP_ID>
   app-secret: <YOUR_FEISHU_APP_SECRET>
+
+douya:
+  document:
+    split:
+      default-strategy: JAVA # JAVA 或 PYTHON
+      python-command: python3
+      python-script: apps/split-document/scripts/split_document.py
+      python-timeout-seconds: 60
 ```
 
 **注意**: 使用向量存储功能前，需要先启动 Chroma 服务。可以使用 Docker 快速启动：
@@ -64,7 +72,7 @@ mvn spring-boot:run
 
 - **API 文档 (Knife4j)**: [http://localhost:8787/api/doc.html](http://localhost:8787/api/doc.html)
 - **向量库可视化仪表**: [http://localhost:8787/api/vector-map.html](http://localhost:8787/api/vector-map.html) (推荐：实时监控向量入库状态与高维指纹分布)
-- **PDF 文档上传与切分**: `POST /api/douya/eating/pdf/upload` (上传并立即触发 Parent-Child 切分与向量化)
+- **PDF 文档上传与切分**: `POST /api/douya/eating/pdf/upload` (上传并立即触发 Parent-Child 切分与向量化，支持 `splitStrategy=JAVA|PYTHON`)
 - **向量库状态查询**: `GET /api/douya/eating/vector/status?limit=100` (查看内容概要)
 - **向量库去重清洗**: `POST /api/douya/eating/vector/clean` (手动触发内容级 Hash 去重)
 - **健康检查**: [http://localhost:8787/api/douya/hello](http://localhost:8787/api/douya/hello)
@@ -169,6 +177,40 @@ douya
 ```
 
 ## 功能特性
+
+### 文档切分双引擎（产品视角）
+
+为提升不同文档类型下的切分效果，Douya 现在提供两种可切换的文档切分方式，并由同一上传接口统一管理：
+
+1. **JAVA 切分（默认）**  
+   - 内置在主服务中，稳定、依赖少，适合常规 PDF 入库。
+2. **PYTHON 切分（新增）**  
+   - 集成 `apps/split-document` 工具链，适合需要更灵活切分策略的场景。  
+   - 与 Java 流程共享同一向量入库与检索链路，不改变产品使用方式。
+
+#### 用户怎么用
+
+- 上传接口不变：`POST /api/douya/eating/pdf/upload`
+- 可选参数：`splitStrategy=JAVA|PYTHON`
+- 不传时：使用配置项 `douya.document.split.default-strategy`
+
+示例：
+
+```bash
+curl -X POST 'http://localhost:8787/api/douya/eating/pdf/upload?splitStrategy=PYTHON' \
+  -F 'file=@/path/to/demo.pdf' \
+  -F 'documentName=demo.pdf'
+```
+
+#### 可靠性机制
+
+- 当 `PYTHON` 切分异常（脚本不存在、超时、运行失败）时，系统会自动回退到 `JAVA` 切分，保证上传流程不中断。
+- 向量入库、检索、引用输出流程保持一致，仅切分方式不同。
+
+#### 仓库统一管理
+
+- 上游仓库 `tengjiaozhai/split-document` 已并入当前仓库目录 `apps/split-document`，由 douya 统一版本管理（无嵌套 Git 历史）。
+- 上游说明保留在 `apps/split-document/README.upstream.md` 供追溯。
 
 ### 飞书集成 (Feishu Integration)
 
@@ -820,7 +862,8 @@ documents/
 douya/
 ├── apps/
 │   ├── java-server/                  # 现有 Spring Boot 服务（逐步迁移）
-│   └── python-rag/                   # 新增：PageIndexRAG 服务（FastAPI/CLI）
+│   ├── python-rag/                   # 新增：PageIndexRAG 服务（FastAPI/CLI）
+│   └── split-document/               # Python 文档切分工具（来源 split-document 仓库并入）
 ├── libs/
 │   ├── rag-schema/                   # 共享 DTO/JSON Schema/提示词模板
 │   └── eval-dataset/                 # 评测集与标注

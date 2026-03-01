@@ -57,3 +57,11 @@ page-index-rag:
     base-url: http://127.0.0.1:9000
     connect-timeout: 3s
     read-timeout: 30s
+
+douya:
+    document:
+        split:
+            default-strategy: JAVA
+            python-command: python3
+            python-script: apps/split-document/scripts/split_document.py
+            python-timeout-seconds: 60

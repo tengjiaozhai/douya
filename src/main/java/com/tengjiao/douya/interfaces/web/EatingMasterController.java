@@ -1,7 +1,9 @@
 package com.tengjiao.douya.interfaces.web;
 
 import com.tengjiao.douya.application.service.EatingMasterApp;
+import com.tengjiao.douya.domain.eating.model.DocumentSplitStrategy;
 import com.tengjiao.douya.domain.eating.model.PdfProcessResult;
+import com.tengjiao.douya.domain.eating.model.PdfSplitOptions;
 import com.tengjiao.douya.domain.eating.service.PdfDocumentService;
 import com.tengjiao.douya.infrastructure.config.ChromaProperties;
 import com.tengjiao.douya.infrastructure.vectorstore.UserVectorApp;
@@ -17,6 +19,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -47,7 +50,8 @@ public class EatingMasterController {
     @Operation(summary = "上传并处理 PDF 文档(同步)")
     public PdfProcessResult uploadPdf(
             @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "documentName", required = false) String documentName) {
+            @RequestParam(value = "documentName", required = false) String documentName,
+            @RequestParam(value = "splitStrategy", required = false) String splitStrategy) {
         
         String fileName = (documentName != null && !documentName.isEmpty()) 
                 ? documentName : file.getOriginalFilename();
@@ -55,7 +59,10 @@ public class EatingMasterController {
         log.info("接收到 PDF 上传请求: {}, 大小: {} bytes", fileName, file.getSize());
 
         try {
-            return pdfDocumentService.processPdfDocument(file.getInputStream(), fileName);
+            PdfSplitOptions options = PdfSplitOptions.builder()
+                    .strategy(parseSplitStrategy(splitStrategy))
+                    .build();
+            return pdfDocumentService.processPdfDocument(file.getInputStream(), fileName, options);
         } catch (IOException e) {
             log.error("读取上传文件失败: {}", e.getMessage(), e);
             return PdfProcessResult.builder()
@@ -63,6 +70,18 @@ public class EatingMasterController {
                     .status("FAILED")
                     .errorMessage("文件读取失败: " + e.getMessage())
                     .build();
+        }
+    }
+
+    private DocumentSplitStrategy parseSplitStrategy(String splitStrategy) {
+        if (splitStrategy == null || splitStrategy.isBlank()) {
+            return null;
+        }
+        try {
+            return DocumentSplitStrategy.valueOf(splitStrategy.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            log.warn("无效 splitStrategy 参数: {}, 将使用默认策略", splitStrategy);
+            return null;
         }
     }
 

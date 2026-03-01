@@ -1,0 +1,11 @@
+# Optional dependencies if you want to restore full upstream PDF pipeline.
+# Current json-stdin integration mode only requires Python stdlib.
+
+langchain
+langchain-community
+langchain-text-splitters
+pypdf
+rapidocr-pdf
+pymupdf
+oss2
+rapidocr-onnxruntime
