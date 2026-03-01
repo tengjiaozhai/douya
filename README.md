@@ -16,6 +16,18 @@ Douya 是一个基于 Spring Boot 开发的智能体（AI Agent）后端服务�
 - **构建工具**: Maven
 - **JDK 版本**: Java 21
 
+## 阅读导航（建议顺序）
+
+如果你是第一次接触本项目，建议按以下顺序阅读：
+
+1. **产品说明**：先读 `PRODUCT-OVERVIEW.md`，快速理解业务价值、能力边界、典型流程。  
+2. **快速开始**：再跑起来，确认服务、Swagger、核心接口可用。  
+3. **功能特性**：理解产品能力边界（多智能体、RAG、PDF 切分）。  
+4. **项目结构（DDD）**：定位改代码时应该改哪一层。  
+5. **更新日志**：只在需要追溯历史决策时查看。  
+
+> 当前版本最重要的新能力：`/douya/eating/pdf/upload` 支持 `splitStrategy=JAVA|PYTHON`，并且 `PYTHON` 失败会自动回退 `JAVA`。
+
 ## 快速开始
 
 ### 1. 环境准备
@@ -103,12 +115,15 @@ mvn spring-boot:run
 - **RedisStore**:
   - **服务**: 需安装 Redis Server (推荐 6.0+)。
   - **依赖**: `spring-boot-starter-data-redis`。
-- **调整 DeepSeek 集成**: 由于 Spring AI 1.0.0-M6 不包含 `spring-ai-starter-model-deepseek`，已将其替换为 `spring-ai-openai-spring-boot-starter`，并通过 OpenAI 兼容模式连接 DeepSeek API。相关配置已在 `ModelConfig.java` 中更新。
 - **自定义 PostgresStore**: 解决了 `DatabaseStore` 在 PostgreSQL 下使用 MySQL 语法 (`ON DUPLICATE KEY UPDATE`) 导致的语法错误问题。新增 `PostgresStore` 实现类，采用 `INSERT ... ON CONFLICT` 语法适配 PostgreSQL，并在 `DataSourceConfig` 中完成了替换。
   - **初始化**: 需手动创建存储 Session/State 的数据表 (Schema)。
 - **MongoStore**:
   - **服务**: 需安装 MongoDB Server。
   - **依赖**: `spring-boot-starter-data-mongodb`。
+
+补充说明：
+
+- **DeepSeek 集成历史说明**：项目已采用 OpenAI 兼容方式接入 DeepSeek，对当前 MemoryStore/RedisStore 选择没有直接影响，可在“多模型冲突解决”章节查看详细背景。
 
 > **⚠️ 重要区分**:
 > 上述要求仅针对 **Agent 记忆/状态 (Memory/State)** 存储。
@@ -262,10 +277,7 @@ curl -X POST 'http://localhost:8787/api/douya/eating/pdf/upload?splitStrategy=PY
               host: http://localhost
               port: 8000
     ```
-
-    ````
-
-    4.  **使用示例**:
+4.  **使用示例**:
 
     ```java
     @Autowired
@@ -280,7 +292,7 @@ curl -X POST 'http://localhost:8787/api/douya/eating/pdf/upload?splitStrategy=PY
 
     // 相似度搜索
     List<Document> results = userVectorApp.searchSimilar("我想吃辣的", "user123");
-    ````
+    ```
 
 ### 用户偏好学习 (User Preference Learning)
 
