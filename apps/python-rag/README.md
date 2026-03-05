@@ -117,3 +117,32 @@ curl 'http://127.0.0.1:9000/api/rag/page-index/status'
 - 当前使用本地 JSON 作为索引存储，便于快速验证流程。
 - 当前回答为“检索型拼接回答”，未接入生成式 LLM。
 - M2 已支持可选 Qdrant 混合检索、可选 BGE reranker、可选 LLM 生成器（均支持自动降级）。
+
+## Upload File Directly
+
+You can now upload a document file directly and let the server parse + split pages automatically.
+
+Endpoint:
+
+- `POST /api/rag/page-index/ingest/file` (`multipart/form-data`)
+
+Supported files:
+
+- Plain text-like files: `.txt`, `.md`, `.csv`, `.json`, `.yaml`, `.xml`, `.html`, `.log`, ...
+- `.pdf` (text PDF)
+- `.docx`
+
+Example:
+
+```bash
+curl -X POST 'http://127.0.0.1:9000/api/rag/page-index/ingest/file' \
+  -F 'file=@./sample.pdf' \
+  -F 'doc_name=sample.pdf' \
+  -F 'version=v1' \
+  -F 'metadata={"source":"local-upload"}'
+```
+
+Notes:
+
+- PDF keeps original page boundaries when possible.
+- DOCX/text files are normalized and split automatically.

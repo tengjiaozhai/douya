@@ -36,4 +36,5 @@ application-local.yml
 *.jpg
 *.jpeg
 *.code-workspace
+.agent/*
 
