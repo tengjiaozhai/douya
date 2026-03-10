@@ -58,14 +58,18 @@ def _parse_metadata(raw: str | None, *, source_type: str, filename: str | None) 
     base = {"upload_source_type": source_type}
     if filename:
         base["filename"] = filename
+    if raw is None:
+        return base
+    raw = raw.strip()
     if not raw:
         return base
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError("metadata must be valid JSON object string") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError("metadata must be a JSON object")
-    parsed.update(base)
-    return parsed
+    except json.JSONDecodeError:
+        # Accept plain text metadata to keep upload flow frictionless.
+        return {**base, "raw_metadata": raw}
+    if isinstance(parsed, dict):
+        parsed.update(base)
+        return parsed
+    return {**base, "raw_metadata": str(parsed)}
 

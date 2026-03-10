@@ -28,3 +28,18 @@ def test_upload_txt_file_ingest(tmp_path: Path) -> None:
     status = client.get("/api/rag/page-index/status")
     assert status.status_code == 200
     assert status.json()["docs"] == 1
+
+
+def test_upload_accepts_plain_text_metadata(tmp_path: Path) -> None:
+    repo = JsonRepository(tmp_path / "store.json")
+    service = PageIndexRagService(repo, RagConfig())
+    app = FastAPI()
+    app.include_router(build_router(service))
+    client = TestClient(app)
+
+    files = {"file": ("demo.txt", "只上传文件就行".encode("utf-8"), "text/plain")}
+    data = {"metadata": "just-a-note"}
+    resp = client.post("/api/rag/page-index/ingest/file", files=files, data=data)
+
+    assert resp.status_code == 200
+    assert resp.json()["page_count"] >= 1
