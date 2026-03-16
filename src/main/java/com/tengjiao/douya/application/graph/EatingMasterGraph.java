@@ -30,7 +30,6 @@ public class EatingMasterGraph {
     private final ReactAgent visionAgent;
     private final ReactAgent dailyAgent;
     private final ReactAgent promptRewriterAgent;
-    private final ReactAgent responseFormatterAgent; // 新增
     private final String supervisorSystemPrompt;
     private final String supervisorInstruction;
     private final RunnableConfig config;
@@ -40,7 +39,6 @@ public class EatingMasterGraph {
                              ReactAgent visionAgent,
                              ReactAgent dailyAgent,
                              ReactAgent promptRewriterAgent,
-                             ReactAgent responseFormatterAgent, // 新参数
                              String supervisorSystemPrompt,
                              String supervisorInstruction,
                              RunnableConfig config) {
@@ -49,7 +47,6 @@ public class EatingMasterGraph {
         this.visionAgent = visionAgent;
         this.dailyAgent = dailyAgent;
         this.promptRewriterAgent = promptRewriterAgent;
-        this.responseFormatterAgent = responseFormatterAgent;
         this.supervisorSystemPrompt = supervisorSystemPrompt;
         this.supervisorInstruction = supervisorInstruction;
         this.config = config;
@@ -65,7 +62,6 @@ public class EatingMasterGraph {
             strategies.put("VisionUnderstand", new ReplaceStrategy());
             strategies.put("DailyAssistant", new ReplaceStrategy());
             strategies.put("PromptRewriter", new ReplaceStrategy());
-            strategies.put("ResponseFormatter", new ReplaceStrategy()); // 新增
             strategies.put("routing_count", new ReplaceStrategy()); // 路由次数计数
             strategies.put("routing_history", new AppendStrategy()); // 路由历史追踪
             return strategies;
@@ -85,7 +81,6 @@ public class EatingMasterGraph {
         NodeAction visionNode = state -> runAgent(visionAgent, state, "VisionUnderstand");
         NodeAction dailyNode = state -> runAgent(dailyAgent, state, "DailyAssistant");
         NodeAction promptRewriterNode = state -> runAgent(promptRewriterAgent, state, "PromptRewriter");
-        NodeAction responseFormatterNode = state -> runAgent(responseFormatterAgent, state, "ResponseFormatter"); // 新增
 
         // 3. 构建 StateGraph
         StateGraph graph = new StateGraph(keyStrategyFactory)
@@ -94,7 +89,6 @@ public class EatingMasterGraph {
                 .addNode("VisionUnderstand", node_async(visionNode))
                 .addNode("DailyAssistant", node_async(dailyNode))
                 .addNode("PromptRewriter", node_async(promptRewriterNode))
-                .addNode("ResponseFormatter", node_async(responseFormatterNode)) // 新增
                 .addEdge(START, "PromptRewriter")
  // 修改：START -> PromptRewriter
                 .addEdge("PromptRewriter", "supervisor") // 修改：PromptRewriter -> supervisor
@@ -106,7 +100,7 @@ public class EatingMasterGraph {
                                 "EatingMaster", "EatingMaster",
                                 "VisionUnderstand", "VisionUnderstand",
                                 "DailyAssistant", "DailyAssistant",
-                                "FINISH", "ResponseFormatter" // 改为指向格式化器
+                                "FINISH", END // 改为指向格式化器
                         )
                 )
                 // Worker 后的路由逻辑：如果已决策完成则直达 END，否则回流到 supervisor
@@ -114,27 +108,26 @@ public class EatingMasterGraph {
                         "EatingMaster",
                         edge_async(state -> {
                             String next = (String) state.value("next").orElse("FINISH");
-                            return "FINISH".equalsIgnoreCase(next) ? "ResponseFormatter" : "supervisor";
+                            return "FINISH".equalsIgnoreCase(next) ? END : "supervisor";
                         }),
-                        Map.of("ResponseFormatter", "ResponseFormatter", "supervisor", "supervisor")
+                        Map.of(END, END, "supervisor", "supervisor")
                 )
                 .addConditionalEdges(
                         "VisionUnderstand",
                         edge_async(state -> {
                             String next = (String) state.value("next").orElse("FINISH");
-                            return "FINISH".equalsIgnoreCase(next) ? "ResponseFormatter" : "supervisor";
+                            return "FINISH".equalsIgnoreCase(next) ? END : "supervisor";
                         }),
-                        Map.of("ResponseFormatter", "ResponseFormatter", "supervisor", "supervisor")
+                        Map.of(END, END, "supervisor", "supervisor")
                 )
-                .addConditionalEdges( // 新增 DailyAssistant 的回流逻辑
+                .addConditionalEdges( // DailyAssistant fallback routing
                         "DailyAssistant",
                         edge_async(state -> {
                             String next = (String) state.value("next").orElse("FINISH");
-                            return "FINISH".equalsIgnoreCase(next) ? "ResponseFormatter" : "supervisor"; // 指向格式化器
+                            return "FINISH".equalsIgnoreCase(next) ? END : "supervisor";
                         }),
-                        Map.of("ResponseFormatter", "ResponseFormatter", "supervisor", "supervisor")
-                )
-                .addEdge("ResponseFormatter", END); // 格式化后结束
+                        Map.of(END, END, "supervisor", "supervisor")
+                );
 
         return graph.compile();
     }

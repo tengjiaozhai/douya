@@ -199,11 +199,6 @@ public class EatingMasterApp {
                 Collections.emptyList());
         ReactAgent promptRewriterAgent = promptRewriterAgentObj.build();
 
-        ResponseFormatterAgent responseFormatterAgentObj = new ResponseFormatterAgent(structTransformModel,
-                Collections.emptyList(),
-                Collections.emptyList(),
-                Collections.emptyList());
-        ReactAgent responseFormatterAgent = responseFormatterAgentObj.build();
 
         // 构建运行配置
         RunnableConfig config = RunnableConfig.builder()
@@ -219,7 +214,6 @@ public class EatingMasterApp {
                 visionAgent,
                 dailyAgent,
                 promptRewriterAgent,
-                responseFormatterAgent, // 新增
                 supervisorSystemPrompt,
                 supervisorInstruction,
                 config);
@@ -246,14 +240,6 @@ public class EatingMasterApp {
             if (invoke.isPresent()) {
                 OverAllState state = invoke.get();
                 // 核心：优先获取格式化后的结构化输出
-                if (state.data().containsKey("ResponseFormatter")) {
-                    Object output = state.data().get("ResponseFormatter");
-                    if (output instanceof AssistantMessage am) {
-                        // 这里不再调用 saveConversationPair，或者可以根据需要记录
-                        saveConversationPair(userId, userMessage.getText(), am.getText(), "ResponseFormatter");
-                        return am.getText();
-                    }
-                }
 
                 // 备份：如果格式化器失败，尝试获取各子 Agent 的原始输出（为了鲁棒性）
                 String[] agents = {"EatingMaster", "DailyAssistant", "VisionUnderstand"};

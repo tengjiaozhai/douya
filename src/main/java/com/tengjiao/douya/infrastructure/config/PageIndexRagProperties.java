@@ -17,7 +17,7 @@ public class PageIndexRagProperties {
     /**
      * 是否启用 Java -> Python PageIndexRAG 代理
      */
-    private boolean enabled = true;
+    private boolean enabled = false;
 
     /**
      * Python 服务地址，例如: http://127.0.0.1:9000

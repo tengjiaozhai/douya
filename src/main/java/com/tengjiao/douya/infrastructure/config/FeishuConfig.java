@@ -284,6 +284,7 @@ public class FeishuConfig {
                                                         Jsons.DEFAULT.toJson(responseContent),
                                                         UUID.randomUUID().toString()));
                                     }
+                                    default -> {}
                                 }
                             } catch (Exception e) {
                                 log.error("[Feishu] 异步处理消息 {} 异常", messageId, e);
