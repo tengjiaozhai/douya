@@ -13,9 +13,15 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 
+import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static com.alibaba.cloud.ai.graph.StateGraph.END;
 import static com.alibaba.cloud.ai.graph.StateGraph.START;
@@ -24,6 +30,8 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
 
 @Slf4j
 public class EatingMasterGraph {
+    private static final Pattern OSS_URL_PATTERN =
+            Pattern.compile("(?i)ossUrl\\s*=\\s*(https?://[^\\s\"'\\\\)\\]]+)");
 
     private final ChatModel summaryChatModel;
     private final ReactAgent eatingMasterAgent;
@@ -155,7 +163,9 @@ public class EatingMasterGraph {
             Object result = agent.invoke(new UserMessage(lastText), this.config).orElse(null);
 
             String responseText = "Agent failed to respond.";
+            List<String> toolImageUrls = List.of();
             if (result instanceof OverAllState subState) {
+                toolImageUrls = extractImageUrlsFromState(subState);
                 if (subState.data().containsKey(agentName)) { // outputKey
                     Object out = subState.data().get(agentName);
                     if (out instanceof AssistantMessage am) {
@@ -178,6 +188,10 @@ public class EatingMasterGraph {
                 responseText = result.toString();
             }
 
+            if ("EatingMaster".equals(agentName)) {
+                responseText = appendMissingImageAssets(responseText, toolImageUrls);
+            }
+
             log.info("Agent [{}] response: {}", agentName, responseText);
 
             AssistantMessage assistantMessage = new AssistantMessage(responseText);
@@ -192,5 +206,99 @@ public class EatingMasterGraph {
             log.error("Agent execution failed", e);
             return Map.of("messages", List.of(new AssistantMessage("Agent Error: " + e.getMessage())));
         }
+    }
+
+    private List<String> extractImageUrlsFromState(OverAllState subState) {
+        Set<String> urls = new LinkedHashSet<>();
+
+        Object messagesObj = subState.value("messages").orElse(List.of());
+        if (messagesObj instanceof List<?> messages) {
+            for (Object msgObj : messages) {
+                extractImageUrlsFromObject(msgObj, urls);
+            }
+        }
+
+        // Fallback: some tool payloads may only exist in serialized state data.
+        extractImageUrlsFromText(String.valueOf(subState.data()), urls);
+        return new ArrayList<>(urls);
+    }
+
+    private void extractImageUrlsFromObject(Object obj, Set<String> urls) {
+        if (obj == null) {
+            return;
+        }
+
+        if (obj instanceof Message message) {
+            extractImageUrlsFromText(message.getText(), urls);
+        }
+
+        Object responsesObj = tryInvokeNoArgs(obj, "getResponses");
+        if (responsesObj == null) {
+            responsesObj = tryInvokeNoArgs(obj, "responses");
+        }
+        if (responsesObj instanceof Iterable<?> responses) {
+            for (Object response : responses) {
+                Object responseData = tryInvokeNoArgs(response, "getResponseData");
+                if (responseData == null) {
+                    responseData = tryInvokeNoArgs(response, "responseData");
+                }
+                if (responseData != null) {
+                    extractImageUrlsFromText(String.valueOf(responseData), urls);
+                }
+                extractImageUrlsFromText(String.valueOf(response), urls);
+            }
+        }
+
+        extractImageUrlsFromText(String.valueOf(obj), urls);
+    }
+
+    private Object tryInvokeNoArgs(Object target, String methodName) {
+        try {
+            Method method = target.getClass().getMethod(methodName);
+            return method.invoke(target);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private void extractImageUrlsFromText(String text, Set<String> urls) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        Matcher matcher = OSS_URL_PATTERN.matcher(text);
+        while (matcher.find()) {
+            String url = matcher.group(1);
+            if (url != null && !url.isBlank()) {
+                urls.add(url.trim());
+            }
+        }
+    }
+
+    private String appendMissingImageAssets(String responseText, List<String> toolImageUrls) {
+        if (toolImageUrls == null || toolImageUrls.isEmpty()) {
+            return responseText;
+        }
+
+        Set<String> existingUrls = new LinkedHashSet<>();
+        extractImageUrlsFromText(responseText, existingUrls);
+
+        List<String> missing = toolImageUrls.stream()
+                .filter(url -> url != null && !url.isBlank())
+                .filter(url -> !existingUrls.contains(url))
+                .toList();
+
+        if (missing.isEmpty()) {
+            return responseText;
+        }
+
+        StringBuilder sb = new StringBuilder(responseText == null ? "" : responseText.strip());
+        if (!sb.isEmpty()) {
+            sb.append("\n\n");
+        }
+        sb.append("相关图片资产:\n");
+        for (String url : missing) {
+            sb.append("[图片资产]: ossUrl=").append(url).append("\n");
+        }
+        return sb.toString().strip();
     }
 }

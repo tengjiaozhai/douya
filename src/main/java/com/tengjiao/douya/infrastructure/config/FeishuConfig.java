@@ -41,9 +41,12 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -56,6 +59,11 @@ import java.util.regex.Pattern;
 @Slf4j
 @EnableConfigurationProperties(FeishuProperties.class)
 public class FeishuConfig {
+    private static final Pattern MARKDOWN_IMG_PATTERN = Pattern.compile("!\\[[^\\]]*\\]\\((https?://[^)\\s]+)\\)");
+    private static final Pattern ASSET_IMG_PATTERN = Pattern.compile(
+            "(?im)^\\s*\\[[^\\]]*\\]\\s*:\\s*ossUrl\\s*=\\s*(https?://\\S+)\\s*$");
+    private static final Pattern GENERIC_OSS_URL_PATTERN = Pattern.compile(
+            "(?i)ossUrl\\s*=\\s*(https?://[^\\s\"'\\\\)\\]]+)");
 
     private final FeishuProperties feishuProperties;
 
@@ -150,91 +158,8 @@ public class FeishuConfig {
                                             String aiResponse = eatingMasterApp.ask(userQuery, userId);
 
                                             // 3. 解析回复内容，检查是否包含 Markdown 图片
-                                            Pattern imgPattern = Pattern
-                                                    .compile("!\\[(.*?)\\]\\((.*?)\\)");
-                                            java.util.regex.Matcher matcher = imgPattern.matcher(aiResponse);
-
-                                            if (matcher.find()) {
-                                                log.info("[Feishu] 检测到回复中包含图片，正在构建富文本消息...");
-                                                // 重置 matcher
-                                                matcher.reset();
-
-                                                FeishuPostContent postContent = new FeishuPostContent();
-                                                postContent.setTitle("");
-
-                                                List<PostElement> elements = new ArrayList<>();
-                                                int lastIndex = 0;
-
-                                                while (matcher.find()) {
-                                                    // 添加前面的文本
-                                                    String preText = aiResponse.substring(lastIndex, matcher.start());
-                                                    if (!preText.isEmpty()) {
-                                                        PostElement textElem = new PostElement();
-                                                        textElem.setTag("text");
-                                                        textElem.setText(preText);
-                                                        elements.add(textElem);
-                                                    }
-
-                                                    // 处理图片
-                                                    String imgUrl = matcher.group(2);
-                                                    try {
-                                                        // 下载图片到临时文件
-                                                        String suffix = imgUrl.toLowerCase().endsWith(".png") ? ".png"
-                                                                : ".jpg";
-                                                        File tempImg = File
-                                                                .createTempFile("feishu_upload_", suffix);
-                                                        InputStream in = java.net.URI.create(imgUrl).toURL()
-                                                                .openStream();
-                                                        Files.copy(in, tempImg.toPath(),
-                                                                StandardCopyOption.REPLACE_EXISTING);
-                                                        in.close();
-
-                                                        // 上传到飞书
-                                                        String imageKey = feishuService.uploadImage(tempImg);
-
-                                                        // 添加图片元素
-                                                        PostElement imgElem = new PostElement();
-                                                        imgElem.setTag("img");
-                                                        imgElem.setImageKey(imageKey);
-                                                        elements.add(imgElem);
-
-                                                        // 删除临时文件
-                                                        tempImg.delete();
-                                                    } catch (Exception e) {
-                                                        log.error("[Feishu] 图片处理失败: {}", imgUrl, e);
-                                                        // 降级为链接文本
-                                                        PostElement linkElem = new PostElement();
-                                                        linkElem.setTag("a");
-                                                        linkElem.setText("[图片链接]");
-                                                        linkElem.setHref(imgUrl);
-                                                        elements.add(linkElem);
-                                                    }
-
-                                                    lastIndex = matcher.end();
-                                                }
-
-                                                // 添加剩余文本
-                                                String tailText = aiResponse.substring(lastIndex);
-                                                if (!tailText.isEmpty()) {
-                                                    PostElement textElem = new PostElement();
-                                                    textElem.setTag("text");
-                                                    textElem.setText(tailText);
-                                                    elements.add(textElem);
-                                                }
-
-                                                postContent.setContent(List.of(elements));
-
-                                                // 封装为发送格式 {"zh_cn": ...}
-                                                FeishuPostMessageContent sendContent = new FeishuPostMessageContent();
-                                                sendContent.setZhCn(postContent);
-
-                                                feishuService.sendMessage("user_id",
-                                                        new FeishuMessageSendRequest(userId, "post",
-                                                                Jsons.DEFAULT.toJson(sendContent),
-                                                                UUID.randomUUID().toString()));
-
-                                            } else {
-                                                // 纯文本消息
+                                            if (!sendPostIfContainsImages(userId, aiResponse)) {
+                                                // 绾枃鏈秷鎭?
                                                 feishuTextContent.setText(aiResponse);
                                                 feishuService.sendMessage("user_id",
                                                         new FeishuMessageSendRequest(userId, messageType,
@@ -357,6 +282,141 @@ public class FeishuConfig {
         return new Client.Builder(feishuProperties.getAppId(), feishuProperties.getAppSecret())
                 .eventHandler(eventHandler)
                 .build();
+    }
+
+    /**
+     * 解析 AI 回复中的图片并发送 Feishu post 富文本。
+     */
+    private boolean sendPostIfContainsImages(String userId, String aiResponse) {
+        RichMessageParts parts = parseRichMessage(aiResponse);
+        if (parts.imageUrls().isEmpty()) {
+            return false;
+        }
+
+        log.info("[Feishu] 检测到图片资产，使用 post 富文本发送. imageCount={}", parts.imageUrls().size());
+
+        FeishuPostContent postContent = new FeishuPostContent();
+        postContent.setTitle("");
+        postContent.setContent(buildPostParagraphs(parts.text(), parts.imageUrls()));
+
+        FeishuPostMessageContent sendContent = new FeishuPostMessageContent();
+        sendContent.setZhCn(postContent);
+
+        feishuService.sendMessage("user_id",
+                new FeishuMessageSendRequest(userId, "post",
+                        Jsons.DEFAULT.toJson(sendContent),
+                        UUID.randomUUID().toString()));
+        return true;
+    }
+
+    private RichMessageParts parseRichMessage(String aiResponse) {
+        String raw = aiResponse == null ? "" : aiResponse;
+        Set<String> urls = new LinkedHashSet<>();
+
+        collectUrls(MARKDOWN_IMG_PATTERN, raw, urls);
+        collectUrls(ASSET_IMG_PATTERN, raw, urls);
+        collectUrls(GENERIC_OSS_URL_PATTERN, raw, urls);
+
+        String cleaned = MARKDOWN_IMG_PATTERN.matcher(raw).replaceAll("");
+        cleaned = ASSET_IMG_PATTERN.matcher(cleaned).replaceAll("");
+        cleaned = cleaned.replaceAll("(?im)^\\s*相关图片资产\\s*:?\\s*$", "");
+        cleaned = cleaned.replaceAll("(?im)^\\s*鍏宠仈鍥剧墖\\s*:?\\s*$", "");
+        cleaned = cleaned.replaceAll("(?m)^[ \\t]+$", "");
+        cleaned = cleaned.replaceAll("\\n{3,}", "\n\n").trim();
+
+        return new RichMessageParts(cleaned, new ArrayList<>(urls));
+    }
+
+    private void collectUrls(Pattern pattern, String text, Set<String> collector) {
+        Matcher matcher = pattern.matcher(text);
+        while (matcher.find()) {
+            String url = normalizeUrl(matcher.group(1));
+            if (url != null && !url.isBlank()) {
+                collector.add(url);
+            }
+        }
+    }
+
+    private List<List<PostElement>> buildPostParagraphs(String text, List<String> imageUrls) {
+        List<List<PostElement>> paragraphs = new ArrayList<>();
+
+        if (text != null && !text.isBlank()) {
+            String[] blocks = text.split("\\n\\s*\\n");
+            for (String block : blocks) {
+                String paragraphText = block == null ? "" : block.trim();
+                if (paragraphText.isBlank()) {
+                    continue;
+                }
+                PostElement textElem = new PostElement();
+                textElem.setTag("text");
+                textElem.setText(paragraphText);
+                paragraphs.add(List.of(textElem));
+            }
+        }
+
+        for (String imageUrl : imageUrls) {
+            try {
+                String imageKey = uploadRemoteImageToFeishu(imageUrl);
+                PostElement imgElem = new PostElement();
+                imgElem.setTag("img");
+                imgElem.setImageKey(imageKey);
+                paragraphs.add(List.of(imgElem));
+            } catch (Exception e) {
+                log.error("[Feishu] 图片上传失败, 回退链接发送: {}", imageUrl, e);
+                PostElement linkElem = new PostElement();
+                linkElem.setTag("a");
+                linkElem.setText("[图片链接]");
+                linkElem.setHref(imageUrl);
+                paragraphs.add(List.of(linkElem));
+            }
+        }
+
+        if (paragraphs.isEmpty()) {
+            PostElement emptyText = new PostElement();
+            emptyText.setTag("text");
+            emptyText.setText("(empty message)");
+            paragraphs.add(List.of(emptyText));
+        }
+        return paragraphs;
+    }
+
+    private String uploadRemoteImageToFeishu(String imageUrl) throws Exception {
+        String suffix = guessImageSuffix(imageUrl);
+        File tempImg = File.createTempFile("feishu_upload_", suffix);
+        try (InputStream in = java.net.URI.create(imageUrl).toURL().openStream()) {
+            Files.copy(in, tempImg.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        }
+        try {
+            return feishuService.uploadImage(tempImg);
+        } finally {
+            if (!tempImg.delete()) {
+                log.warn("[Feishu] 临时图片文件删除失败: {}", tempImg.getAbsolutePath());
+            }
+        }
+    }
+
+    private String guessImageSuffix(String imageUrl) {
+        String lower = imageUrl == null ? "" : imageUrl.toLowerCase();
+        if (lower.contains(".png")) {
+            return ".png";
+        }
+        if (lower.contains(".webp")) {
+            return ".webp";
+        }
+        if (lower.contains(".gif")) {
+            return ".gif";
+        }
+        return ".jpg";
+    }
+
+    private String normalizeUrl(String url) {
+        if (url == null) {
+            return "";
+        }
+        return url.trim().replaceAll("[\\]\\)>,.;]+$", "");
+    }
+
+    private record RichMessageParts(String text, List<String> imageUrls) {
     }
 
     /**
