@@ -1,5 +1,6 @@
 package com.tengjiao.douya.application.service;
 
+import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
 import com.tengjiao.douya.application.graph.EatingMasterGraph;
 import com.tengjiao.douya.application.hook.CombinedMemoryHook;
 import com.tengjiao.douya.application.hook.PreferenceLearningHook;
@@ -183,8 +184,8 @@ public class EatingMasterApp {
 
         VisionUnderstandAgent visionAgentObj = new VisionUnderstandAgent(readUnderstandModel,
                 Collections.emptyList(),
-                List.of(preferenceLearningHook, combinedMemoryHook),
-                List.of(userPreferInterceptor));
+                List.of(),
+                List.of());
         ReactAgent visionAgent = visionAgentObj.build();
 
         DailyAssistantAgent dailyAgentObj = new DailyAssistantAgent(eatingMasterModel,
@@ -304,8 +305,8 @@ public class EatingMasterApp {
      */
     public String visionAnalyze(String filePath, String userQuery, String userId) {
         log.info("[Vision] 接收到视觉任务: {}, 意图: {}", filePath, userQuery);
+        File file = new File(filePath);
         try {
-            File file = new File(filePath);
             if (!file.exists()) {
                 throw new RuntimeException("文件不存在: " + filePath);
             }
@@ -315,20 +316,104 @@ public class EatingMasterApp {
                 mimeType = "video/mp4";
             }
 
+            String rewrittenQuery = rewriteVisionQuery(userQuery, userId);
+
             UserMessage userMessage = UserMessage.builder()
-                    .text(userQuery)
+                    .text(rewrittenQuery)
                     .media(Media.builder()
                             .mimeType(MimeTypeUtils.parseMimeType(mimeType))
                             .data(Files.toByteArray(file))
                             .build())
                     .build();
 
-            String process = process(userMessage, userId);
-            file.delete();
-            return process;
+            VisionUnderstandAgent visionAgentObj = new VisionUnderstandAgent(readUnderstandModel,
+                    Collections.emptyList(),
+                    Collections.emptyList(),
+                    Collections.emptyList());
+            ReactAgent visionAgent = visionAgentObj.build();
+
+            RunnableConfig visionConfig = RunnableConfig.builder()
+                    .threadId("douya_vision_" + userId + "_" + System.currentTimeMillis())
+                    .addMetadata("user_id", userId)
+                    .store(memoryStore)
+                    .build();
+
+            return invokeAgentText(visionAgent, userMessage, visionConfig, "vision-understand", "视觉感知解析失败");
         } catch (Exception e) {
             log.error("[Vision] 视觉分析预处理失败", e);
             return "视觉感知解析失败";
+        } finally {
+            if (file.exists() && !file.delete()) {
+                log.warn("[Vision] 临时文件删除失败: {}", filePath);
+            }
+        }
+    }
+
+    private String rewriteVisionQuery(String userQuery, String userId) {
+        String rawQuery = (userQuery == null || userQuery.isBlank())
+                ? "请详细解读图片内容，并提取对用户有帮助的关键信息。"
+                : userQuery.trim();
+        try {
+            PromptRewriterAgent promptRewriterAgentObj = new PromptRewriterAgent(douBaoTransitDeepseek,
+                    Collections.emptyList(),
+                    Collections.emptyList(),
+                    Collections.emptyList());
+            ReactAgent promptRewriterAgent = promptRewriterAgentObj.build();
+
+            RunnableConfig rewriteConfig = RunnableConfig.builder()
+                    .threadId("douya_vision_rewrite_" + userId + "_" + System.currentTimeMillis())
+                    .addMetadata("user_id", userId)
+                    .store(memoryStore)
+                    .build();
+
+            String rewriteInstruction = """
+                    请将下面用户意图改写为清晰、可执行的多模态识别指令。
+                    要求：
+                    1. 只保留与图片/视频理解相关的信息；
+                    2. 用一句到两句表达；
+                    3. 仅输出改写后的指令，不要额外解释。
+
+                    用户意图：
+                    %s
+                    """.formatted(rawQuery);
+
+            String rewritten = invokeAgentText(promptRewriterAgent,
+                    new UserMessage(rewriteInstruction),
+                    rewriteConfig,
+                    "prompt-rewriter",
+                    rawQuery);
+            return (rewritten == null || rewritten.isBlank()) ? rawQuery : rewritten.trim();
+        } catch (Exception e) {
+            log.warn("[Vision] 提示词改写失败，回退原始意图: {}", rawQuery, e);
+            return rawQuery;
+        }
+    }
+
+    private String invokeAgentText(ReactAgent agent, UserMessage input, RunnableConfig config,
+                                   String outputKey, String fallback) {
+        try {
+            Object result = agent.invoke(input, config).orElse(null);
+            String responseText = fallback;
+            if (result instanceof OverAllState state) {
+                Object output = state.data().get(outputKey);
+                if (output instanceof AssistantMessage am && am.getText() != null && !am.getText().isBlank()) {
+                    responseText = am.getText();
+                } else {
+                    List<Object> messages = (List<Object>) state.value("messages").orElse(List.of());
+                    if (!messages.isEmpty()) {
+                        Object last = messages.get(messages.size() - 1);
+                        if (last instanceof AssistantMessage am && am.getText() != null && !am.getText().isBlank()) {
+                            responseText = am.getText();
+                        }
+                    }
+                }
+            } else if (result != null && !result.toString().isBlank()) {
+                responseText = result.toString();
+            }
+            return responseText;
+        } catch (Exception e) {
+            log.error("[Multi-Agent] 任务流转失败", e);
+            return fallback;
         }
     }
 

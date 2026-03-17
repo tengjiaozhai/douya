@@ -32,7 +32,12 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.IOException;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -46,8 +51,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Iterator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import javax.imageio.IIOImage;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.ImageOutputStream;
 
 /**
  * 飞书 WebSocket 长连接配置
@@ -59,6 +71,7 @@ import java.util.regex.Pattern;
 @Slf4j
 @EnableConfigurationProperties(FeishuProperties.class)
 public class FeishuConfig {
+    private static final long FEISHU_MAX_IMAGE_BYTES = 10L * 1024 * 1024;
     private static final Pattern MARKDOWN_IMG_PATTERN = Pattern.compile("!\\[[^\\]]*\\]\\((https?://[^)\\s]+)\\)");
     private static final Pattern ASSET_IMG_PATTERN = Pattern.compile(
             "(?im)^\\s*\\[[^\\]]*\\]\\s*:\\s*ossUrl\\s*=\\s*(https?://\\S+)\\s*$");
@@ -119,54 +132,13 @@ public class FeishuConfig {
                                     case "text" -> {
                                         FeishuTextContent feishuTextContent = Jsons.DEFAULT.fromJson(content,
                                                 FeishuTextContent.class);
-                                        String userQuery = feishuTextContent.getText();
-
-                                        // 检查是否有待处理的图片
-                                        String pendingImagePath = eatingMasterApp.getPendingImage(userId);
-                                        if (pendingImagePath != null && !pendingImagePath.isEmpty()) {
-                                            log.info("[Feishu] 发现用户 {} 有待处理图片，开始结合处理", userId);
-
-                                            // 1. 立即回复“正在分析”
-                                            feishuTextContent.setText("收到！正在结合你刚才发的图片进行深度分析...");
-                                            feishuService.sendMessage("user_id",
-                                                    new FeishuMessageSendRequest(userId, messageType,
-                                                            Jsons.DEFAULT.toJson(feishuTextContent),
-                                                            UUID.randomUUID().toString()));
-
-                                            // 2. 调用视觉分析 + 专家对话
-                                            String visionInfo = eatingMasterApp.visionAnalyze(pendingImagePath,
-                                                    userQuery, userId);
-                                            String aiResponse = eatingMasterApp.ask(visionInfo, userId);
-
-                                            // 3. 发送最终结果并清除状态
-                                            feishuTextContent.setText(aiResponse);
-                                            feishuService.sendMessage("user_id",
-                                                    new FeishuMessageSendRequest(userId, messageType,
-                                                            Jsons.DEFAULT.toJson(feishuTextContent),
-                                                            UUID.randomUUID().toString()));
-                                            eatingMasterApp.clearPendingImage(userId);
-                                        } else {
-                                            // 正常聊天流程
-                                            // 1. 立即回复“正在思考”
-                                            feishuTextContent.setText("稍等哦，本大师正在思考...");
-                                            feishuService.sendMessage("user_id",
-                                                    new FeishuMessageSendRequest(userId, messageType,
-                                                            Jsons.DEFAULT.toJson(feishuTextContent),
-                                                            UUID.randomUUID().toString()));
-
-                                            // 2. 调用大模型（耗时操作）
-                                            String aiResponse = eatingMasterApp.ask(userQuery, userId);
-
-                                            // 3. 解析回复内容，检查是否包含 Markdown 图片
-                                            if (!sendPostIfContainsImages(userId, aiResponse)) {
-                                                // 绾枃鏈秷鎭?
-                                                feishuTextContent.setText(aiResponse);
-                                                feishuService.sendMessage("user_id",
-                                                        new FeishuMessageSendRequest(userId, messageType,
-                                                                Jsons.DEFAULT.toJson(feishuTextContent),
-                                                                UUID.randomUUID().toString()));
-                                            }
-                                        }
+                                        handleUserQuery(userId, feishuTextContent == null ? "" : feishuTextContent.getText());
+                                    }
+                                    case "post" -> {
+                                        PostMessageParts postParts = parsePostMessageParts(content);
+                                        log.info("[Feishu] 接收到 post 富文本消息，文本长度: {}, 图片数量: {}",
+                                                postParts.text().length(), postParts.imageKeys().size());
+                                        handlePostMessage(userId, messageId, postParts);
                                     }
                                     case "image" -> {
                                         FeishuImageContent feishuImageContent = Jsons.DEFAULT.fromJson(content,
@@ -284,6 +256,241 @@ public class FeishuConfig {
                 .build();
     }
 
+    private void handleUserQuery(String userId, String userQuery) {
+        String safeQuery = userQuery == null ? "" : userQuery.trim();
+
+        // 检查是否有待处理的图片
+        String pendingImagePath = eatingMasterApp.getPendingImage(userId);
+        if (pendingImagePath != null && !pendingImagePath.isEmpty()) {
+            log.info("[Feishu] 发现用户 {} 有待处理图片，开始结合处理", userId);
+            sendTextMessage(userId, "收到！正在结合你刚才发的图片进行深度分析...");
+
+            // 调用视觉分析 + 专家对话
+            String visionInfo = eatingMasterApp.visionAnalyze(pendingImagePath, safeQuery, userId);
+            String aiResponse = eatingMasterApp.ask(visionInfo, userId);
+
+            sendAiResponse(userId, aiResponse);
+            eatingMasterApp.clearPendingImage(userId);
+            return;
+        }
+
+        // 正常聊天流程
+        sendTextMessage(userId, "稍等哦，本大师正在思考...");
+        String aiResponse = eatingMasterApp.ask(safeQuery, userId);
+        sendAiResponse(userId, aiResponse);
+    }
+
+    private void sendAiResponse(String userId, String aiResponse) {
+        String reply = aiResponse == null ? "" : aiResponse;
+        if (!sendPostIfContainsImages(userId, reply)) {
+            sendTextMessage(userId, reply);
+        }
+    }
+
+    private void sendTextMessage(String userId, String text) {
+        FeishuTextContent response = new FeishuTextContent();
+        response.setText(text == null ? "" : text);
+        feishuService.sendMessage("user_id",
+                new FeishuMessageSendRequest(userId, "text",
+                        Jsons.DEFAULT.toJson(response),
+                        UUID.randomUUID().toString()));
+    }
+
+    private void handlePostMessage(String userId, String messageId, PostMessageParts postParts) {
+        String text = postParts.text() == null ? "" : postParts.text().trim();
+        List<String> imageKeys = postParts.imageKeys();
+
+        if (imageKeys == null || imageKeys.isEmpty()) {
+            handleUserQuery(userId, text);
+            return;
+        }
+
+        sendTextMessage(userId, "收到图文消息，正在先解读图片，再结合文字给你完整回答...");
+
+        List<String> visionInfos = new ArrayList<>();
+        String visionQuery = text.isBlank() ? "请解读图片内容并提取关键信息。" : text;
+        for (int i = 0; i < imageKeys.size(); i++) {
+            String imageKey = imageKeys.get(i);
+            try {
+                String fullPath = downloadImageFromMessage(messageId, imageKey);
+                String visionInfo = eatingMasterApp.visionAnalyze(fullPath, visionQuery, userId);
+                if (visionInfo != null && !visionInfo.isBlank()) {
+                    visionInfos.add("图片" + (i + 1) + "解读：" + visionInfo.trim());
+                }
+            } catch (Exception e) {
+                log.error("[Feishu] post 图片解读失败. messageId={}, imageKey={}", messageId, imageKey, e);
+            }
+        }
+
+        String finalQuery = buildPostCombinedQuery(text, visionInfos);
+        String aiResponse = eatingMasterApp.ask(finalQuery, userId);
+        sendAiResponse(userId, aiResponse);
+    }
+
+    private PostMessageParts parsePostMessageParts(String content) {
+        if (content == null || content.isBlank()) {
+            return new PostMessageParts("", List.of());
+        }
+
+        FeishuPostContent postContent = null;
+        try {
+            FeishuPostMessageContent messageContent = Jsons.DEFAULT.fromJson(content, FeishuPostMessageContent.class);
+            if (messageContent != null) {
+                postContent = messageContent.resolvePostContent();
+            }
+        } catch (Exception e) {
+            log.warn("[Feishu] post 消息包装结构解析失败，将尝试扁平结构解析", e);
+        }
+
+        if (postContent == null) {
+            try {
+                postContent = Jsons.DEFAULT.fromJson(content, FeishuPostContent.class);
+            } catch (Exception e) {
+                log.warn("[Feishu] post 消息内容解析失败: {}", content, e);
+                return new PostMessageParts("", List.of());
+            }
+        }
+        return extractPostMessageParts(postContent);
+    }
+
+    private PostMessageParts extractPostMessageParts(FeishuPostContent postContent) {
+        if (postContent == null) {
+            return new PostMessageParts("", List.of());
+        }
+
+        StringBuilder builder = new StringBuilder();
+        Set<String> imageKeyCollector = new LinkedHashSet<>();
+
+        if (postContent.getTitle() != null && !postContent.getTitle().isBlank()) {
+            builder.append(postContent.getTitle().trim()).append('\n');
+        }
+
+        List<List<PostElement>> paragraphs = postContent.getContent();
+        if (paragraphs != null) {
+            for (List<PostElement> paragraph : paragraphs) {
+                if (paragraph == null || paragraph.isEmpty()) {
+                    continue;
+                }
+                StringBuilder line = new StringBuilder();
+                for (PostElement element : paragraph) {
+                    String fragment = extractPostTextFromElement(element, imageKeyCollector);
+                    if (fragment == null || fragment.isBlank()) {
+                        continue;
+                    }
+                    if (line.length() > 0 && !fragment.startsWith("\n")) {
+                        line.append(' ');
+                    }
+                    line.append(fragment);
+                }
+                String lineText = line.toString().trim();
+                if (!lineText.isBlank()) {
+                    if (builder.length() > 0 && builder.charAt(builder.length() - 1) != '\n') {
+                        builder.append('\n');
+                    }
+                    builder.append(lineText).append('\n');
+                }
+            }
+        }
+        return new PostMessageParts(builder.toString().trim(), new ArrayList<>(imageKeyCollector));
+    }
+
+    private String extractPostTextFromElement(PostElement element, Set<String> imageKeyCollector) {
+        if (element == null) {
+            return "";
+        }
+        String tag = element.getTag() == null ? "" : element.getTag().trim().toLowerCase();
+        return switch (tag) {
+            case "text", "md", "code_block" -> element.getText() == null ? "" : element.getText().trim();
+            case "a" -> {
+                String text = element.getText() == null ? "" : element.getText().trim();
+                String href = element.getHref() == null ? "" : element.getHref().trim();
+                if (!text.isBlank() && !href.isBlank() && !text.contains(href)) {
+                    yield text + " (" + href + ")";
+                }
+                yield !text.isBlank() ? text : href;
+            }
+            case "at" -> {
+                String userName = element.getUserName() == null ? "" : element.getUserName().trim();
+                String mentionUserId = element.getUserId() == null ? "" : element.getUserId().trim();
+                if (!userName.isBlank()) {
+                    yield "@" + userName;
+                }
+                if (!mentionUserId.isBlank()) {
+                    yield "@user_id:" + mentionUserId;
+                }
+                yield "@someone";
+            }
+            case "img" -> {
+                String imageKey = element.getImageKey() == null ? "" : element.getImageKey().trim();
+                if (!imageKey.isBlank()) {
+                    imageKeyCollector.add(imageKey);
+                }
+                yield "";
+            }
+            case "media" -> {
+                String fileKey = element.getFileKey() == null ? "" : element.getFileKey().trim();
+                if (!fileKey.isBlank()) {
+                    yield "[媒体]: file_key=" + fileKey;
+                }
+                yield "[媒体]";
+            }
+            case "emotion" -> {
+                String emojiType = element.getEmojiType() == null ? "" : element.getEmojiType().trim();
+                yield emojiType.isBlank() ? "[表情]" : "[表情:" + emojiType + "]";
+            }
+            case "hr" -> "\n---";
+            default -> element.getText() == null ? "" : element.getText().trim();
+        };
+    }
+
+    private String downloadImageFromMessage(String messageId, String imageKey) throws Exception {
+        String tempPath = resolveFeishuTempPath();
+        File tempDir = new File(tempPath);
+        if (!tempDir.exists() && !tempDir.mkdirs()) {
+            throw new IllegalStateException("创建临时目录失败: " + tempPath);
+        }
+
+        String fileName = imageKey + "_" + UUID.randomUUID() + ".png";
+        String fullPath = tempPath + File.separator + fileName;
+        log.info("[Feishu] 开始下载 post 图片资源到: {}", fullPath);
+        FeiShuGetMessageResourceUtils.getMessageResource(
+                feishuProperties.getAppId(),
+                feishuProperties.getAppSecret(),
+                messageId,
+                imageKey,
+                "image",
+                fullPath);
+        log.info("[Feishu] post 图片资源下载完成: {}", fullPath);
+        return fullPath;
+    }
+
+    private String resolveFeishuTempPath() {
+        ApplicationHome home = new ApplicationHome(getClass());
+        File sourceDir = home.getSource();
+        return sourceDir.getParentFile().getParentFile().getAbsolutePath()
+                + File.separator + "src" + File.separator + "main" + File.separator
+                + "resources" + File.separator + "temp";
+    }
+
+    private String buildPostCombinedQuery(String postText, List<String> visionInfos) {
+        String safeText = postText == null ? "" : postText.trim();
+        if (visionInfos == null || visionInfos.isEmpty()) {
+            return safeText.isBlank() ? "请根据用户发送的图片给出分析和建议。" : safeText;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("用户发送了一条图文消息，请先参考图片解读结果，再结合用户文字完成回答。");
+        if (!safeText.isBlank()) {
+            sb.append("\n\n[用户文字]\n").append(safeText);
+        }
+        sb.append("\n\n[图片解读]\n");
+        for (int i = 0; i < visionInfos.size(); i++) {
+            sb.append(i + 1).append(". ").append(visionInfos.get(i)).append('\n');
+        }
+        sb.append("\n请输出最终答复。");
+        return sb.toString().trim();
+    }
+
     /**
      * 解析 AI 回复中的图片并发送 Feishu post 富文本。
      */
@@ -383,15 +590,120 @@ public class FeishuConfig {
     private String uploadRemoteImageToFeishu(String imageUrl) throws Exception {
         String suffix = guessImageSuffix(imageUrl);
         File tempImg = File.createTempFile("feishu_upload_", suffix);
+        File compressedImg = null;
         try (InputStream in = java.net.URI.create(imageUrl).toURL().openStream()) {
             Files.copy(in, tempImg.toPath(), StandardCopyOption.REPLACE_EXISTING);
         }
         try {
-            return feishuService.uploadImage(tempImg);
+            File uploadFile = tempImg;
+            if (tempImg.length() > FEISHU_MAX_IMAGE_BYTES) {
+                log.warn("[Feishu] 图片超过10MB，尝试压缩后再上传. url={}, size={} bytes", imageUrl, tempImg.length());
+                compressedImg = compressImageToLimit(tempImg, FEISHU_MAX_IMAGE_BYTES);
+                uploadFile = compressedImg;
+                log.info("[Feishu] 图片压缩完成. url={}, size={} bytes", imageUrl, uploadFile.length());
+            }
+            return feishuService.uploadImage(uploadFile);
         } finally {
+            if (compressedImg != null && compressedImg.exists() && !compressedImg.delete()) {
+                log.warn("[Feishu] 压缩临时图片删除失败: {}", compressedImg.getAbsolutePath());
+            }
             if (!tempImg.delete()) {
                 log.warn("[Feishu] 临时图片文件删除失败: {}", tempImg.getAbsolutePath());
             }
+        }
+    }
+
+    private File compressImageToLimit(File sourceFile, long maxBytes) throws IOException {
+        BufferedImage original = ImageIO.read(sourceFile);
+        if (original == null) {
+            throw new IOException("图片格式不支持压缩，文件大小: " + sourceFile.length());
+        }
+
+        BufferedImage rgbImage = toRgbImage(original);
+        int width = rgbImage.getWidth();
+        int height = rgbImage.getHeight();
+
+        IOException lastException = null;
+        for (int attempt = 0; attempt < 12; attempt++) {
+            double scale = attempt < 3 ? 1.0 : Math.pow(0.85d, attempt - 2);
+            int targetWidth = Math.max(1, (int) Math.round(width * scale));
+            int targetHeight = Math.max(1, (int) Math.round(height * scale));
+            float quality = Math.max(0.35f, 0.92f - (attempt * 0.06f));
+
+            BufferedImage candidateImage = (targetWidth == width && targetHeight == height)
+                    ? rgbImage
+                    : resizeImage(rgbImage, targetWidth, targetHeight);
+
+            File candidate = File.createTempFile("feishu_upload_compressed_", ".jpg");
+            try {
+                writeJpeg(candidateImage, candidate, quality);
+                if (candidate.length() <= maxBytes) {
+                    return candidate;
+                }
+                if (!candidate.delete()) {
+                    log.warn("[Feishu] 压缩候选文件删除失败: {}", candidate.getAbsolutePath());
+                }
+            } catch (IOException e) {
+                lastException = e;
+                if (!candidate.delete()) {
+                    log.warn("[Feishu] 压缩失败候选文件删除失败: {}", candidate.getAbsolutePath());
+                }
+            }
+        }
+
+        if (lastException != null) {
+            throw lastException;
+        }
+        throw new IOException("图片压缩后仍超过 10MB，原始大小: " + sourceFile.length());
+    }
+
+    private BufferedImage toRgbImage(BufferedImage source) {
+        if (source.getType() == BufferedImage.TYPE_INT_RGB) {
+            return source;
+        }
+        BufferedImage rgb = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2d = rgb.createGraphics();
+        try {
+            g2d.setColor(Color.WHITE);
+            g2d.fillRect(0, 0, source.getWidth(), source.getHeight());
+            g2d.drawImage(source, 0, 0, null);
+        } finally {
+            g2d.dispose();
+        }
+        return rgb;
+    }
+
+    private BufferedImage resizeImage(BufferedImage source, int width, int height) {
+        BufferedImage resized = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2d = resized.createGraphics();
+        try {
+            g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2d.drawImage(source, 0, 0, width, height, null);
+        } finally {
+            g2d.dispose();
+        }
+        return resized;
+    }
+
+    private void writeJpeg(BufferedImage image, File output, float quality) throws IOException {
+        Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpg");
+        if (!writers.hasNext()) {
+            throw new IOException("当前运行环境没有可用 JPEG 编码器");
+        }
+
+        ImageWriter writer = writers.next();
+        try (ImageOutputStream ios = ImageIO.createImageOutputStream(output)) {
+            writer.setOutput(ios);
+            ImageWriteParam param = writer.getDefaultWriteParam();
+            if (param.canWriteCompressed()) {
+                param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+                param.setCompressionQuality(quality);
+            }
+            writer.write(null, new IIOImage(image, null, null), param);
+        } finally {
+            writer.dispose();
         }
     }
 
@@ -414,6 +726,9 @@ public class FeishuConfig {
             return "";
         }
         return url.trim().replaceAll("[\\]\\)>,.;]+$", "");
+    }
+
+    private record PostMessageParts(String text, List<String> imageKeys) {
     }
 
     private record RichMessageParts(String text, List<String> imageUrls) {

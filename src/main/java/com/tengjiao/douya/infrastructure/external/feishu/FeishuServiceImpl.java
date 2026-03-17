@@ -16,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
@@ -192,7 +193,7 @@ public class FeishuServiceImpl implements FeishuService {
     }
 
     @Override
-    public String uploadImage(java.io.File imageFile) {
+    public String uploadImage(File imageFile) {
         if (imageFile == null || !imageFile.exists()) {
             throw new IllegalArgumentException("图片文件不存在");
         }
