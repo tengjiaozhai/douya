@@ -801,6 +801,46 @@ documents/
   - 变更摘要：全面优化了 `kb-dashboard.html` 页面的视觉审美与布局逻辑。引入硬朗复古风格配色与字体组合，将原本共存单页面的 Chroma 和 PageIndexRAG 编辑区域重构为两套独立的导航标签页（Tabs）。
   - 行为变化：保留原有的增删改查逻辑与 API 调用交互，单屏视野不再拥挤，更便于独立处理对应的存储空间数据。
   - 配置变化：无新增/删除配置项。
+- **个人知识库仪表盘设计文档归档**:
+  - 变更摘要：新增文档 `docs/retrieval/personal-kb-dashboard-design-archive.md`，归档仪表盘的目标、架构边界、接口设计、更新策略、风险与演进建议。
+  - 行为变化：无运行时行为变化，仅新增设计文档沉淀。
+  - 配置变化：无新增/删除配置项。
+- **仓库规则新增：设计文档与测试用例统一归档到 docs/**:
+  - 变更摘要：在仓库规则文件 `AGENTS.md` 新增约束，要求所有设计文档与测试用例文档统一存放在 `docs/` 目录，并在后续改动中逐步迁移历史散落文档。
+  - 行为变化：后续新增/维护文档时需遵循 `docs/` 集中归档规范，便于统一学习、复盘与持续改良。
+  - 配置变化：无新增/删除配置项。
+- **ingestFile 终端直调脚本测试用例补充**:
+  - 变更摘要：将 `PageIndexRagController#ingestFile` 注释示例更新为“终端直接调用 `apps/python-rag/scripts/page_index_ingest_file.py`”的测试用例，并新增归档文档 `docs/retrieval/page-index-rag-ingest-file-cli-testcase.md`。
+  - 行为变化：文档与注释示例从 Java HTTP `curl` 代理方式扩展为 Python 脚本直调方式，便于独立验证 ingest-file 脚本链路。
+  - 配置变化：无新增/删除配置项。
+- **ingestFile 直调命令可执行性增强**:
+  - 变更摘要：在 `docs/retrieval/page-index-rag-ingest-file-cli-testcase.md` 新增“快速可执行命令”章节，提供仓库根目录执行与任意目录（绝对路径）执行两种终端命令模板。
+  - 行为变化：测试文档从“分步生成 payload + 调用脚本”扩展为“一条管道命令可直接执行”，降低联调门槛。
+  - 配置变化：无新增/删除配置项。
+- **PageIndexRAG ingest 脚本注释增强**:
+  - 变更摘要：为 `apps/python-rag/scripts/page_index_ingest_file.py` 与 `apps/python-rag/scripts/page_index_ingest.py` 增加分段注释，明确 stdin 契约、参数校验、metadata 合并规则、异常返回格式与写库流程。
+  - 行为变化：仅注释增强，无运行逻辑变化。
+  - 配置变化：无新增/删除配置项。
+- **PageIndexRAG ingest 脚本注释中文化（逐步细化）**:
+  - 变更摘要：将 `apps/python-rag/scripts/page_index_ingest_file.py` 与 `apps/python-rag/scripts/page_index_ingest.py` 的说明注释统一替换为中文，并细化到关键代码行级别（导入路径引导、stdin 读取、字段校验、metadata 处理、异常返回等）。
+  - 行为变化：仅注释与可读性增强，不影响脚本输入输出契约与运行结果。
+  - 配置变化：无新增/删除配置项。
+- **PageIndexRAG 文件解析器逐行中文注释化**:
+  - 变更摘要：对 `apps/python-rag/app/indexing/file_parser.py` 进行逐行级中文注释补充，覆盖文本/PDF/DOCX 解析分支、OCR 回退、OSS 图片上传、环境变量读取与错误处理路径。
+  - 行为变化：仅增强可读性与可维护性，不改变解析逻辑、输入输出格式与现有调用方式。
+  - 配置变化：无新增/删除配置项。
+- **ingest-file 脚本新增 PyCharm 友好调试入参**:
+  - 变更摘要：为 `apps/python-rag/scripts/page_index_ingest_file.py` 新增可选参数 `--payload-file`，支持直接从 JSON 文件读取 payload；并在 `docs/retrieval/page-index-rag-ingest-file-cli-testcase.md` 增加 PyCharm Run/Debug 配置与断点调试步骤。
+  - 行为变化：脚本除原有 `stdin` 管道模式外，新增“payload 文件直读”模式，便于在 IDE 中快速调试查看变量与中间结果；历史调用方式保持兼容。
+  - 配置变化：无新增/删除环境变量；新增 CLI 可选参数 `--payload-file`。
+- **ingest-file 脚本支持仅传文件路径入库**:
+  - 变更摘要：为 `apps/python-rag/scripts/page_index_ingest_file.py` 新增 `--file-path` 直传模式，可仅传本地文件路径完成入库；并补充 `--doc-id`、`--doc-name`、`--version`、`--metadata-json`、`--data-file` 可选参数。同步更新 `docs/retrieval/page-index-rag-ingest-file-cli-testcase.md` 为“路径直传优先”的调试与测试步骤。
+  - 行为变化：调用方可不再构造 `file_base64` JSON，直接以文件路径调用脚本；原有 `stdin/payload-file` JSON 模式继续兼容。
+  - 配置变化：无新增/删除环境变量；新增 CLI 可选参数 `--file-path`、`--doc-id`、`--doc-name`、`--version`、`--metadata-json`、`--data-file`。
+- **PageIndexRAG 检索核心代码注释强化（儿童可读版）**:
+  - 变更摘要：为 `apps/python-rag/app/services/page_index_rag_service.py`、`apps/python-rag/app/core/retrieval.py`、`apps/python-rag/app/core/reranker.py` 补充细粒度中文注释，重点解释 RRF 融合、阈值兜底、邻页扩展、词法/语义混合重排，并加入简短示例帮助理解。
+  - 行为变化：仅注释增强，不改变检索逻辑、排序结果结构和脚本调用方式。
+  - 配置变化：无新增/删除配置项。
 
 ### 2026-03-21
 

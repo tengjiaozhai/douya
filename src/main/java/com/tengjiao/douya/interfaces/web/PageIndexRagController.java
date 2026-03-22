@@ -93,20 +93,44 @@ public class PageIndexRagController {
      * 4) 合规与到期治理：
      *    {"compliance":"internal","retention_until":"2026-12-31","owner":"zhangsan"}
      *
-     * 示例1：首次入库（不指定 doc_id，让系统自动生成）
-     * curl -X POST 'http://127.0.0.1:8787/api/douya/page-index-rag/ingest/file' \
-     *   -F 'file=@/path/to/menu.pdf' \
-     *   -F 'doc_name=门店菜单.pdf' \
-     *   -F 'version=v1' \
-     *   -F 'metadata={"source":"ops","department":"beijing","tags":["menu","2026Q1"]}'
+     * 终端直调 Python 脚本测试用例（等价于 ingestFile 的核心调用）：
+     *
+     * 示例1：首次入库（不指定 doc_id，让脚本自动生成）
+     * 1) 先生成 JSON payload（自动将 PDF 转 base64）：
+     * python3 - <<'PY' > /tmp/page_index_ingest_file_payload.json
+     * import base64, json, pathlib
+     * p = pathlib.Path("/path/to/menu.pdf")
+     * payload = {
+     *   "file_name": p.name,
+     *   "file_base64": base64.b64encode(p.read_bytes()).decode("utf-8"),
+     *   "doc_name": "门店菜单.pdf",
+     *   "version": "v1",
+     *   "metadata": {"source": "ops", "department": "beijing", "tags": ["menu", "2026Q1"]}
+     * }
+     * print(json.dumps(payload, ensure_ascii=False))
+     * PY
+     * 2) 再将 payload 通过 stdin 喂给脚本：
+     * cat /tmp/page_index_ingest_file_payload.json | \
+     * /opt/anaconda3/envs/douya-page-index-rag/bin/python \
+     * apps/python-rag/scripts/page_index_ingest_file.py --mode json-stdin
      *
      * 示例2：对同一文档做新版本入库（复用 doc_id）
-     * curl -X POST 'http://127.0.0.1:8787/api/douya/page-index-rag/ingest/file' \
-     *   -F 'file=@/path/to/menu_v2.pdf' \
-     *   -F 'doc_id=doc_menu_001' \
-     *   -F 'doc_name=门店菜单.pdf' \
-     *   -F 'version=v2' \
-     *   -F 'metadata={"source":"ops","change_ticket":"CM-2026-0318"}'
+     * python3 - <<'PY' > /tmp/page_index_ingest_file_payload_v2.json
+     * import base64, json, pathlib
+     * p = pathlib.Path("/path/to/menu_v2.pdf")
+     * payload = {
+     *   "file_name": p.name,
+     *   "file_base64": base64.b64encode(p.read_bytes()).decode("utf-8"),
+     *   "doc_id": "doc_menu_001",
+     *   "doc_name": "门店菜单.pdf",
+     *   "version": "v2",
+     *   "metadata": {"source": "ops", "change_ticket": "CM-2026-0318"}
+     * }
+     * print(json.dumps(payload, ensure_ascii=False))
+     * PY
+     * cat /tmp/page_index_ingest_file_payload_v2.json | \
+     * /opt/anaconda3/envs/douya-page-index-rag/bin/python \
+     * apps/python-rag/scripts/page_index_ingest_file.py --mode json-stdin
      */
     @PostMapping(value = "/ingest/file", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "调用 PythonTool 执行 PageIndexRAG 文件入库")
