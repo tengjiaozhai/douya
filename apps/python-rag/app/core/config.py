@@ -11,6 +11,7 @@ class RagConfig:
     child_overlap: int = 64
     dense_top_k: int = 60
     sparse_top_k: int = 60
+    keyword_top_k: int = 60
     rrf_k: int = 60
     page_pool_size: int = 20
     neighbor_window: int = 1

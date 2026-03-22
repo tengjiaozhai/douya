@@ -30,7 +30,8 @@ from app.core.retrieval import (
     build_idf,
     cosine_similarity,
     hash_embedding,
-    rrf_fusion,
+    keyword_match_score,
+    rrf_fusion_multi,
     sparse_similarity,
     sparse_terms,
 )
@@ -211,7 +212,7 @@ class PageIndexRagService:
         """执行检索查询。
 
         查询流程（可以理解为四关）：
-        1) chunk 召回（dense + sparse + RRF 融合）
+        1) chunk 召回（dense + sparse + keyword + RRF 融合）
         2) page 聚合（同页 chunk 分数累加）
         3) 邻页扩展（补充上下文）
         4) 重排 + 证据抽取（给 citation）
@@ -233,6 +234,7 @@ class PageIndexRagService:
                     reranker=getattr(self.reranker, "name", None),
                     generator=getattr(self.generator, "name", None),
                     retrieval_source=None,
+                    retrieval_route_hits={},
                 )
                 if req.with_debug
                 else None,
@@ -244,8 +246,10 @@ class PageIndexRagService:
         q_vector = hash_embedding(query, self.cfg.vector_dim)
         # 为问题构建稀疏词项。
         q_terms = sparse_terms(query)
+        # 为问题构建关键词序列（用于关键字路由）。
+        q_tokens = tokenize(query)
         # 获取融合后的 chunk 分数。
-        fused, retrieval_source = self._fused_chunk_scores(snapshot, q_vector, q_terms)
+        fused, retrieval_source, route_hits = self._fused_chunk_scores(snapshot, q_vector, q_terms, q_tokens)
 
         # 把 chunk 按融合分从高到低排序。
         scored_chunks = sorted(fused.items(), key=lambda x: x[1], reverse=True)
@@ -295,11 +299,12 @@ class PageIndexRagService:
         answer = self._compose_answer(query, evidence_snippets)
         # 记录结束日志，便于观察召回规模与排序效果。
         logger.info(
-            "query_done retrieved=%s candidate_pages=%s rerank_pages=%s source=%s reranker=%s generator=%s",
+            "query_done retrieved=%s candidate_pages=%s rerank_pages=%s source=%s route_hits=%s reranker=%s generator=%s",
             len(selected_chunks),
             len(candidate_pages),
             len(top_pages),
             retrieval_source,
+            route_hits,
             getattr(self.reranker, "name", None),
             getattr(self.generator, "name", None),
         )
@@ -313,6 +318,7 @@ class PageIndexRagService:
                 reranker=getattr(self.reranker, "name", None),
                 generator=getattr(self.generator, "name", None),
                 retrieval_source=retrieval_source,
+                retrieval_route_hits=route_hits,
             )
         # 返回查询结果；citations 按 top_k 截断，避免过多。
         return QueryResponse(answer=answer, citations=citations[: req.top_k], debug=debug)
@@ -426,13 +432,15 @@ class PageIndexRagService:
         snapshot: StorageSnapshot,
         q_vector: list[float],
         q_terms: dict[str, float],
-    ) -> tuple[dict[str, float], str]:
-        """融合两路 chunk 召回分数（dense + sparse -> RRF）。
+        q_tokens: list[str],
+    ) -> tuple[dict[str, float], str, dict[str, int]]:
+        """融合多路 chunk 召回分数（dense + sparse + keyword -> RRF）。
 
         这里是“检索难点”之一，建议这样理解：
         - dense 像“语义相近”雷达：同义词也可能命中
         - sparse 像“关键词精确匹配”：字面词一致时很稳
-        - RRF 融合让两者互补，减少单一路径偏差
+        - keyword 像“术语硬匹配”：专有名词/型号词命中更直接
+        - RRF 融合让多路互补，减少单一路径偏差
         """
         # 取所有 chunk 作为候选池。
         chunks = list(snapshot.chunks.values())
@@ -451,13 +459,38 @@ class PageIndexRagService:
             ((c.chunk_id, sparse_similarity(q_terms, c.sparse_terms, idf)) for c in chunks),
             key=lambda x: x[1],
             reverse=True,
-        )[: self.cfg.sparse_top_k]
+        )
+        # 稀疏分为 0 的候选对排序没有意义，提前过滤噪声。
+        sparse_sorted = [item for item in sparse_sorted if item[1] > 0][: self.cfg.sparse_top_k]
+        # keyword 路：关键词匹配排序，取前 keyword_top_k。
+        keyword_sorted = sorted(
+            ((c.chunk_id, keyword_match_score(q_tokens, c.sparse_terms, idf)) for c in chunks),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        # 关键词路同样过滤 0 分噪声，避免无命中时误加名次。
+        keyword_sorted = [item for item in keyword_sorted if item[1] > 0][: self.cfg.keyword_top_k]
         # 把“排序列表”转成“名次字典”。
         # 例子：第 1 名记为 rank=1，第 2 名记为 rank=2。
         dense_ranks = {chunk_id: i + 1 for i, (chunk_id, _) in enumerate(dense_sorted)}
         sparse_ranks = {chunk_id: i + 1 for i, (chunk_id, _) in enumerate(sparse_sorted)}
+        keyword_ranks = {chunk_id: i + 1 for i, (chunk_id, _) in enumerate(keyword_sorted)}
+
+        # 记录每一路命中数，便于 debug 观察。
+        route_hits = {
+            "dense": len(dense_ranks),
+            "sparse": len(sparse_ranks),
+            "keyword": len(keyword_ranks),
+        }
+        # 汇总参与融合的路由标签。
+        active_routes = [name for name, hits in route_hits.items() if hits > 0]
+        retrieval_source = f"local_rrf[{'+'.join(active_routes)}]" if active_routes else "local_rrf[none]"
         # 返回融合分数与来源标识。
-        return rrf_fusion(dense_ranks, sparse_ranks, self.cfg.rrf_k), "local_rrf"
+        return (
+            rrf_fusion_multi([dense_ranks, sparse_ranks, keyword_ranks], self.cfg.rrf_k),
+            retrieval_source,
+            route_hits,
+        )
 
 
 def _top_keywords(tokens: list[str], n: int) -> list[str]:

@@ -7,7 +7,7 @@
 ## 当前能力（M1）
 
 - `POST /api/rag/page-index/ingest`：文档入库（页级 + 子块）
-- `POST /api/rag/page-index/query`：混合检索（dense + sparse + RRF）
+- `POST /api/rag/page-index/query`：多路混合检索（dense + sparse + keyword + RRF）
 - `GET /api/rag/page-index/status`：索引状态
 - `GET /health`：健康检查
 
@@ -91,6 +91,12 @@ curl -X POST 'http://127.0.0.1:9000/api/rag/page-index/query' \
     "with_debug": true
   }'
 ```
+
+说明：
+
+- `with_debug=true` 时，返回 `debug.retrieval_source`（示例：`local_rrf[dense+sparse+keyword]`）
+- 同时返回 `debug.retrieval_route_hits`，用于观察 dense/sparse/keyword 各路命中规模。
+- 关键词路由候选规模由 `RagConfig.keyword_top_k` 控制，默认值 `60`。
 
 ### 3) Status
 

@@ -47,6 +47,7 @@ class QueryDebug(BaseModel):
     reranker: str | None = None
     generator: str | None = None
     retrieval_source: str | None = None
+    retrieval_route_hits: dict[str, int] | None = None
 
 
 class QueryResponse(BaseModel):

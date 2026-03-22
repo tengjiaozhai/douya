@@ -133,6 +133,46 @@ def sparse_similarity(
     return score
 
 
+def keyword_match_score(
+    query_tokens: list[str],
+    doc_terms: dict[str, float],
+    idf: dict[str, float],
+) -> float:
+    """计算关键词匹配分（强调“字面命中”能力）。
+
+    设计目标：
+    - 和 dense（语义）互补：同义词用 dense，精确术语用 keyword。
+    - 和 sparse（TF*TF*IDF）互补：keyword 更强调“覆盖了哪些查询词”。
+
+    评分思路：
+    1) 先算“覆盖率”：查询词中有多少被命中（按 IDF 加权）。
+    2) 再算“词频密度”：命中词在文档中的局部强度（平均 TF）。
+    3) 线性融合（覆盖率主导，密度辅助）。
+    """
+    # 查询或文档为空时，无法做关键词匹配。
+    if not query_tokens or not doc_terms:
+        return 0.0
+    # 查询按“去重词”统计覆盖率，避免重复词放大影响。
+    query_set = set(query_tokens)
+    # 求命中词集合（查询词与文档词交集）。
+    hit_terms = query_set & set(doc_terms.keys())
+    # 一个都没命中，直接 0 分。
+    if not hit_terms:
+        return 0.0
+
+    # 覆盖率（IDF 加权）：
+    # - 稀有词（IDF 高）命中价值更大。
+    total_idf = sum(idf.get(term, 1.0) for term in query_set)
+    hit_idf = sum(idf.get(term, 1.0) for term in hit_terms)
+    weighted_coverage = (hit_idf / total_idf) if total_idf > 0 else 0.0
+
+    # 词频密度：命中词在文档中的平均 TF（作为辅助信号）。
+    tf_density = sum(doc_terms.get(term, 0.0) for term in hit_terms) / float(len(hit_terms))
+
+    # 覆盖率优先，密度次之。
+    return weighted_coverage * 0.85 + tf_density * 0.15
+
+
 def build_idf(all_docs_terms: list[dict[str, float]]) -> dict[str, float]:
     """根据语料构建每个词的 IDF。
 
@@ -157,36 +197,37 @@ def build_idf(all_docs_terms: list[dict[str, float]]) -> dict[str, float]:
     return {k: math.log(1 + (n - v + 0.5) / (v + 0.5)) for k, v in df.items()}
 
 
-def rrf_fusion(ranks_dense: dict[str, int], ranks_sparse: dict[str, int], k: int) -> dict[str, float]:
-    """用 RRF（Reciprocal Rank Fusion）融合两路排序结果。
+def rrf_fusion_multi(rank_routes: list[dict[str, int]], k: int) -> dict[str, float]:
+    """用 RRF（Reciprocal Rank Fusion）融合多路排序结果。
 
     公式：
-    - 分数 = 1/(k + dense_rank) + 1/(k + sparse_rank)
-    - 某一路没命中就当该项分数为 0。
+    - 分数 = Σ(1 / (k + route_rank))
+    - 某一路没命中就当该路贡献为 0。
 
     为什么用“名次”而不是“原始分值”：
     - 不同检索器的分值尺度常常不一致，直接相加不公平。
     - 名次更稳定，融合更鲁棒。
-
-    小例子（k=60）：
-    - chunkA: dense第1名，sparse第3名
-      分数 = 1/61 + 1/63
-    - chunkB: dense第2名，sparse未命中
-      分数 = 1/62 + 0
     """
     # 取并集：只要任一路出现过，都进入融合候选集。
-    keys = set(ranks_dense) | set(ranks_sparse)
+    keys: set[str] = set()
+    for route in rank_routes:
+        keys.update(route.keys())
     # 保存融合后的最终分数。
     fused: dict[str, float] = {}
     # 逐项计算融合分。
     for key in keys:
-        # 取 dense/sparse 的名次（可能不存在）。
-        dense_rank = ranks_dense.get(key)
-        sparse_rank = ranks_sparse.get(key)
-        # 有名次才给分；没有该路结果就给 0。
-        dense_score = 1.0 / (k + dense_rank) if dense_rank is not None else 0.0
-        sparse_score = 1.0 / (k + sparse_rank) if sparse_rank is not None else 0.0
-        # 两路相加得到最终融合分。
-        fused[key] = dense_score + sparse_score
+        total = 0.0
+        # 累加每一路的倒数名次分。
+        for route in rank_routes:
+            rank = route.get(key)
+            if rank is None:
+                continue
+            total += 1.0 / (k + rank)
+        fused[key] = total
     # 返回 {chunk_id: fused_score}。
     return fused
+
+
+def rrf_fusion(ranks_dense: dict[str, int], ranks_sparse: dict[str, int], k: int) -> dict[str, float]:
+    """兼容旧接口：融合两路排序。"""
+    return rrf_fusion_multi([ranks_dense, ranks_sparse], k)

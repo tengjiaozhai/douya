@@ -778,6 +778,10 @@ documents/
 
 ### 2026-03-22
 
+- **PageIndexRAG 新增关键词路由多路检索 + RRF 融合筛选**:
+  - 变更摘要：在 `apps/python-rag/app/services/page_index_rag_service.py` 与 `apps/python-rag/app/core/retrieval.py` 增加 `keyword` 精确匹配召回通道，并将融合从双路扩展为 `dense + sparse + keyword` 三路 RRF；同时新增 `apps/python-rag/tests/test_retrieval.py` 与 `apps/python-rag/tests/test_service.py` 覆盖多路融合与关键词命中行为。
+  - 行为变化：`query` 调试信息新增 `debug.retrieval_route_hits`，`debug.retrieval_source` 由固定 `local_rrf` 升级为可读路由标识（示例：`local_rrf[dense+sparse+keyword]`）；检索阶段对专有词/术语命中更稳定。
+  - 配置变化：`RagConfig` 新增参数 `keyword_top_k`（默认 `60`），用于限制关键词召回参与 RRF 的候选规模。
 - **恢复并完成上次中断改造（脚本模式收口）**:
   - 完成 `PageIndexRagProperties` 改造的断点续做：移除残留 HTTP 依赖，`PageIndexRagClient` 全量改为本地 Python 脚本调用（`status/ingest/query/ingest/file`）。
   - 删除 Java 侧 `PageIndexRagConfig(RestClient)`，不再依赖 `page-index-rag.base-url/connect-timeout/read-timeout`。
@@ -876,7 +880,7 @@ documents/
 ### 1. 设计目标
 
 1. `Page-first`：以页面 (`page`) 为主索引实体，答案必须可回溯到页码。
-2. `Hybrid Retrieval`：向量检索 + BM25 稀疏检索融合，降低漏召回。
+2. `Hybrid Retrieval`：向量检索 + BM25 稀疏检索 + 关键词精确匹配融合，降低漏召回。
 3. `Small-to-Big`：子块召回，父页返回，兼顾精度与上下文完整性。
 4. `Rerank First`：召回后重排，保证最终上下文质量。
 5. `Production Ready`：支持增量更新、版本控制、权限过滤与评测闭环。
@@ -898,6 +902,7 @@ documents/
 | 文本切分 | `parent_unit` | `page` | 父级上下文单位固定为页 |
 | 召回 | `dense_top_k` | `60` | 向量召回候选 |
 | 召回 | `sparse_top_k` | `60` | BM25 召回候选 |
+| 召回 | `keyword_top_k` | `60` | 关键词召回候选 |
 | 融合 | `fusion` | `RRF(k=60)` | 稳定融合策略 |
 | 聚合 | `page_pool_size` | `20` | chunk 聚合后的候选页数量 |
 | 邻页扩展 | `neighbor_window` | `1` | 命中页前后各扩展 1 页 |
@@ -911,7 +916,7 @@ documents/
 ### 4. 查询流程（Pipeline）
 
 1. Query 预处理：拼写归一、意图分类（事实问答/流程问答/总结）。
-2. 并行召回：Dense + Sparse 并行检索子块。
+2. 并行召回：Dense + Sparse + Keyword 并行检索子块。
 3. 融合去重：RRF 融合，按 `chunk_id/page_id` 去重。
 4. 页级聚合：按 `page_id` 汇总分数，形成候选页。
 5. 邻页扩展：按 `neighbor_window` 补充上下文页。

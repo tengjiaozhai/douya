@@ -23,3 +23,25 @@ def test_ingest_and_query(tmp_path: Path) -> None:
     assert query_resp.citations
     assert any(c.page_no == 2 for c in query_resp.citations)
 
+
+def test_query_debug_contains_keyword_route(tmp_path: Path) -> None:
+    repo = JsonRepository(tmp_path / "store.json")
+    service = PageIndexRagService(repo, RagConfig())
+
+    service.ingest(
+        IngestRequest(
+            doc_name="keyword-doc",
+            pages=[
+                "hyperflux_omega reactor calibration manual",
+                "banana potassium nutrition notes",
+            ],
+        )
+    )
+
+    query_resp = service.query(QueryRequest(query="hyperflux_omega", top_k=2, with_debug=True))
+    assert query_resp.debug is not None
+    assert query_resp.debug.retrieval_source is not None
+    assert "keyword" in query_resp.debug.retrieval_source
+    assert query_resp.debug.retrieval_route_hits is not None
+    assert query_resp.debug.retrieval_route_hits["keyword"] > 0
+    assert any(c.page_no == 1 for c in query_resp.citations)
