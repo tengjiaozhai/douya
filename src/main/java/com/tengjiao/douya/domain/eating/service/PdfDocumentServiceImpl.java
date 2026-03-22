@@ -60,6 +60,10 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
 
     // 图片格式
     private static final String IMAGE_FORMAT = "png";
+    private static final String ENV_DOC_SPLIT_PYTHON_COMMAND = "DOUYA_DOC_SPLIT_PYTHON_COMMAND";
+    private static final String ENV_DOC_SPLIT_PYTHON_EXECUTABLE = "DOUYA_DOC_SPLIT_PYTHON_EXECUTABLE";
+    private static final String ENV_DOC_SPLIT_PYTHON_SCRIPT = "DOUYA_DOC_SPLIT_PYTHON_SCRIPT";
+    private static final String ENV_DOC_SPLIT_PYTHON_TIMEOUT_SECONDS = "DOUYA_DOC_SPLIT_PYTHON_TIMEOUT_SECONDS";
 
     @Override
     @Async
@@ -201,7 +205,7 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
                 CHILD_CHUNK_OVERLAP,
                 PARENT_CONTEXT_SIZE);
 
-        Path scriptPath = Path.of(documentSplitProperties.getPythonScript());
+        Path scriptPath = resolveScriptPath();
         if (!scriptPath.isAbsolute()) {
             scriptPath = Path.of(System.getProperty("user.dir")).resolve(scriptPath).normalize();
         }
@@ -209,11 +213,7 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             throw new IllegalStateException("Python 切分脚本不存在: " + scriptPath);
         }
 
-        ProcessBuilder processBuilder = new ProcessBuilder(
-                documentSplitProperties.getPythonCommand(),
-                scriptPath.toString(),
-                "--mode",
-                "json-stdin");
+        ProcessBuilder processBuilder = new ProcessBuilder(buildPythonCommand(scriptPath));
         Process process = processBuilder.start();
 
         try (var outputStream = process.getOutputStream()) {
@@ -221,7 +221,7 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
             outputStream.flush();
         }
 
-        boolean finished = process.waitFor(documentSplitProperties.getPythonTimeoutSeconds(), TimeUnit.SECONDS);
+        boolean finished = process.waitFor(resolvePythonTimeoutSeconds(), TimeUnit.SECONDS);
         if (!finished) {
             process.destroyForcibly();
             throw new IllegalStateException("Python 切分超时");
@@ -276,6 +276,52 @@ public class PdfDocumentServiceImpl implements PdfDocumentService {
         }
 
         return documents;
+    }
+
+    private List<String> buildPythonCommand(Path scriptPath) {
+        List<String> command = new ArrayList<>();
+        String pythonExecutable = resolveEnv(ENV_DOC_SPLIT_PYTHON_EXECUTABLE, documentSplitProperties.getPythonExecutable());
+        if (pythonExecutable != null && !pythonExecutable.isBlank()) {
+            command.add(pythonExecutable.trim());
+        } else {
+            String pythonCommand = resolveEnv(ENV_DOC_SPLIT_PYTHON_COMMAND, documentSplitProperties.getPythonCommand());
+            command.add((pythonCommand == null || pythonCommand.isBlank()) ? "python3" : pythonCommand.trim());
+        }
+        command.add(scriptPath.toString());
+        command.add("--mode");
+        command.add("json-stdin");
+        return command;
+    }
+
+    private Path resolveScriptPath() {
+        String script = resolveEnv(ENV_DOC_SPLIT_PYTHON_SCRIPT, documentSplitProperties.getPythonScript());
+        if (script == null || script.isBlank()) {
+            throw new IllegalStateException("Python 切分脚本路径未配置");
+        }
+        return Path.of(script.trim());
+    }
+
+    private long resolvePythonTimeoutSeconds() {
+        String timeoutText = System.getenv(ENV_DOC_SPLIT_PYTHON_TIMEOUT_SECONDS);
+        if (timeoutText != null && !timeoutText.isBlank()) {
+            try {
+                long timeout = Long.parseLong(timeoutText.trim());
+                if (timeout > 0) {
+                    return timeout;
+                }
+            } catch (NumberFormatException ignored) {
+                log.warn("环境变量 {} 不是有效整数: {}", ENV_DOC_SPLIT_PYTHON_TIMEOUT_SECONDS, timeoutText);
+            }
+        }
+        return Math.max(1, documentSplitProperties.getPythonTimeoutSeconds());
+    }
+
+    private String resolveEnv(String envKey, String fallback) {
+        String envValue = System.getenv(envKey);
+        if (envValue != null && !envValue.isBlank()) {
+            return envValue;
+        }
+        return fallback;
     }
 
     private List<PdfImageInfo> extractAndUploadImages(PDDocument document, String documentName) {

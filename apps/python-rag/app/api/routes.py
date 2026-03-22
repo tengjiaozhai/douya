@@ -36,7 +36,10 @@ def build_router(service: PageIndexRagService) -> APIRouter:
                 doc_id=doc_id,
                 doc_name=doc_name or file.filename or "uploaded-document",
                 pages=parsed.pages,
-                metadata=_parse_metadata(metadata, source_type=parsed.source_type, filename=file.filename),
+                metadata=_merge_metadata(
+                    base=_parse_metadata(metadata, source_type=parsed.source_type, filename=file.filename),
+                    parsed=parsed.metadata,
+                ),
                 version=version,
             )
             return service.ingest(req)
@@ -73,3 +76,17 @@ def _parse_metadata(raw: str | None, *, source_type: str, filename: str | None) 
         return parsed
     return {**base, "raw_metadata": str(parsed)}
 
+
+def _merge_metadata(*, base: dict, parsed: dict) -> dict:
+    if not parsed:
+        return base
+    merged = dict(base)
+    for k, v in parsed.items():
+        if k not in merged:
+            merged[k] = v
+            continue
+        if isinstance(merged[k], dict) and isinstance(v, dict):
+            merged[k] = {**v, **merged[k]}
+            continue
+        merged[f"parser_{k}"] = v
+    return merged

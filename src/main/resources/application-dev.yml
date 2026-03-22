@@ -53,19 +53,21 @@ aliyun:
         bucket-name: ${ALIYUN_OSS_BUCKET_NAME:your-bucket-name}
 
 page-index-rag:
-    enabled: true
-    base-url: http://127.0.0.1:9000
-    connect-timeout: 3s
-    read-timeout: 30s
-    python-command: python3
+    enabled: ${PAGE_INDEX_RAG_ENABLED:true}
+    python-command: ${PAGE_INDEX_RAG_PYTHON_COMMAND:python3}
     python-executable: ${PAGE_INDEX_RAG_PYTHON_EXECUTABLE:/opt/anaconda3/envs/douya-page-index-rag/bin/python}
-    query-script: apps/python-rag/scripts/page_index_query.py
-    python-timeout-seconds: 30
+    query-script: ${PAGE_INDEX_RAG_QUERY_SCRIPT:apps/python-rag/scripts/page_index_query.py}
+    ingest-script: ${PAGE_INDEX_RAG_INGEST_SCRIPT:apps/python-rag/scripts/page_index_ingest.py}
+    ingest-file-script: ${PAGE_INDEX_RAG_INGEST_FILE_SCRIPT:apps/python-rag/scripts/page_index_ingest_file.py}
+    status-script: ${PAGE_INDEX_RAG_STATUS_SCRIPT:apps/python-rag/scripts/page_index_status.py}
+    data-file: ${PAGE_INDEX_RAG_DATA_FILE:}
+    python-timeout-seconds: ${PAGE_INDEX_RAG_PYTHON_TIMEOUT_SECONDS:60}
 
 douya:
     document:
         split:
             default-strategy: JAVA
-            python-command: python3
-            python-script: apps/split-document/scripts/split_document.py
-            python-timeout-seconds: 60
+            python-command: ${DOUYA_DOC_SPLIT_PYTHON_COMMAND:python3}
+            python-executable: ${DOUYA_DOC_SPLIT_PYTHON_EXECUTABLE:}
+            python-script: ${DOUYA_DOC_SPLIT_PYTHON_SCRIPT:apps/split-document/scripts/split_document.py}
+            python-timeout-seconds: ${DOUYA_DOC_SPLIT_PYTHON_TIMEOUT_SECONDS:60}

@@ -4,10 +4,8 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
-
 /**
- * PageIndexRAG Python 服务配置
+ * PageIndexRAG Python 脚本工具配置
  */
 @Data
 @Component
@@ -15,24 +13,9 @@ import java.time.Duration;
 public class PageIndexRagProperties {
 
     /**
-     * 是否启用 Java -> Python PageIndexRAG 代理
+     * 是否启用 PageIndexRAG PythonTool 脚本调用
      */
     private boolean enabled = false;
-
-    /**
-     * Python 服务地址，例如: http://127.0.0.1:9000
-     */
-    private String baseUrl = "http://127.0.0.1:9000";
-
-    /**
-     * 连接超时
-     */
-    private Duration connectTimeout = Duration.ofSeconds(3);
-
-    /**
-     * 读取超时
-     */
-    private Duration readTimeout = Duration.ofSeconds(30);
 
     /**
      * 调用本地 Python 脚本使用的解释器命令。
@@ -51,7 +34,28 @@ public class PageIndexRagProperties {
     private String queryScript = "apps/python-rag/scripts/page_index_query.py";
 
     /**
+     * PageIndexRAG JSON 入库脚本路径。
+     */
+    private String ingestScript = "apps/python-rag/scripts/page_index_ingest.py";
+
+    /**
+     * PageIndexRAG 文件入库脚本路径。
+     */
+    private String ingestFileScript = "apps/python-rag/scripts/page_index_ingest_file.py";
+
+    /**
+     * PageIndexRAG 状态脚本路径。
+     */
+    private String statusScript = "apps/python-rag/scripts/page_index_status.py";
+
+    /**
+     * 固定数据文件路径（可选）。
+     * 若不配置，脚本会回退 PAGE_INDEX_RAG_DATA_DIR/data 默认规则。
+     */
+    private String dataFile;
+
+    /**
      * Python 脚本调用超时（秒）。
      */
-    private int pythonTimeoutSeconds = 30;
+    private int pythonTimeoutSeconds = 60;
 }

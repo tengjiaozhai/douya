@@ -59,9 +59,10 @@ douya:
   document:
     split:
       default-strategy: JAVA # JAVA 或 PYTHON
-      python-command: python3
-      python-script: apps/split-document/scripts/split_document.py
-      python-timeout-seconds: 60
+      python-command: ${DOUYA_DOC_SPLIT_PYTHON_COMMAND:python3}
+      python-executable: ${DOUYA_DOC_SPLIT_PYTHON_EXECUTABLE:}
+      python-script: ${DOUYA_DOC_SPLIT_PYTHON_SCRIPT:apps/split-document/scripts/split_document.py}
+      python-timeout-seconds: ${DOUYA_DOC_SPLIT_PYTHON_TIMEOUT_SECONDS:60}
 ```
 
 **注意**: 使用向量存储功能前，需要先启动 Chroma 服务。可以使用 Docker 快速启动：
@@ -84,6 +85,7 @@ mvn spring-boot:run
 
 - **API 文档 (Knife4j)**: [http://localhost:8787/api/doc.html](http://localhost:8787/api/doc.html)
 - **向量库可视化仪表**: [http://localhost:8787/api/vector-map.html](http://localhost:8787/api/vector-map.html) (推荐：实时监控向量入库状态与高维指纹分布)
+- **个人知识库仪表盘**: [http://localhost:8787/api/kb-dashboard.html](http://localhost:8787/api/kb-dashboard.html)（统一查看与编辑 Chroma 向量条目 + PageIndexRAG 文档）
 - **PDF 文档上传与切分**: `POST /api/douya/eating/pdf/upload` (上传并立即触发 Parent-Child 切分与向量化，支持 `splitStrategy=JAVA|PYTHON`)
 - **向量库状态查询**: `GET /api/douya/eating/vector/status?limit=100` (查看内容概要)
 - **向量库去重清洗**: `POST /api/douya/eating/vector/clean` (手动触发内容级 Hash 去重)
@@ -774,6 +776,32 @@ documents/
   - 明确了 Child（200 tokens）作为向量检索单元、Parent（1200 tokens）作为 LLM 上下文注入单元的职责分离策略。
   - 补充了核心代码示例，说明 `UserVectorApp.searchSimilar` 如何在命中子块后自动提取 `parent_text` 并进行智能去重，从架构层面解决"精准检索 vs 丰富上下文"的根本矛盾。
 
+### 2026-03-22
+
+- **恢复并完成上次中断改造（脚本模式收口）**:
+  - 完成 `PageIndexRagProperties` 改造的断点续做：移除残留 HTTP 依赖，`PageIndexRagClient` 全量改为本地 Python 脚本调用（`status/ingest/query/ingest/file`）。
+  - 删除 Java 侧 `PageIndexRagConfig(RestClient)`，不再依赖 `page-index-rag.base-url/connect-timeout/read-timeout`。
+  - 行为变化：Java 转发仍保留原接口路径，但内部已统一为 `PythonTool` 脚本执行，不再调用 Python HTTP API。
+- **Python 接口服务废弃（默认）**:
+  - `apps/python-rag/scripts/run_dev.sh` 默认拒绝启动 HTTP 服务。
+  - `apps/python-rag/app/main.py` 默认返回 `deprecated/script-only`，旧 `/api/rag/page-index/*` 在未显式开启时返回 `410 Gone`。
+  - 如需临时兼容旧接口，可设置：`PAGE_INDEX_RAG_ENABLE_HTTP_SERVICE=true`。
+- **环境变量统一化（任何 Python 功能）**:
+  - PageIndexRAG 脚本调用新增/统一环境变量：`PAGE_INDEX_RAG_PYTHON_COMMAND`、`PAGE_INDEX_RAG_PYTHON_EXECUTABLE`、`PAGE_INDEX_RAG_QUERY_SCRIPT`、`PAGE_INDEX_RAG_INGEST_SCRIPT`、`PAGE_INDEX_RAG_INGEST_FILE_SCRIPT`、`PAGE_INDEX_RAG_STATUS_SCRIPT`、`PAGE_INDEX_RAG_DATA_FILE`、`PAGE_INDEX_RAG_PYTHON_TIMEOUT_SECONDS`。
+  - PDF Python 切分新增/统一环境变量：`DOUYA_DOC_SPLIT_PYTHON_COMMAND`、`DOUYA_DOC_SPLIT_PYTHON_EXECUTABLE`、`DOUYA_DOC_SPLIT_PYTHON_SCRIPT`、`DOUYA_DOC_SPLIT_PYTHON_TIMEOUT_SECONDS`。
+- **PageIndexRAG 文件入库参数注释增强（文档化改进）**:
+  - 变更摘要：在 `PageIndexRagController#ingestFile` 为 `doc_id/doc_name/version/metadata` 新增详细中文注释，补充用途说明与两组 `curl` 示例（首版入库、同文档版本升级）。
+  - 行为变化：仅增强代码可读性与维护可理解性，不改变接口路径、请求结构、参数可选性和运行时行为。
+  - 配置变化：无新增/删除配置项。
+- **PageIndexRAG metadata 注释补充（场景化说明）**:
+  - 变更摘要：补充 `metadata` 的“为什么传”说明、常见字段含义（如 `source/tenant_id/acl/uploader/doc_type/tags`）以及 4 类业务场景示例（多租户隔离、版本灰度、OCR 质量控制、合规到期治理）。
+  - 行为变化：仅注释增强，无运行逻辑变化。
+  - 配置变化：无新增/删除配置项。
+- **个人知识库仪表盘（Chroma + PageIndexRAG）优化**:
+  - 变更摘要：全面优化了 `kb-dashboard.html` 页面的视觉审美与布局逻辑。引入硬朗复古风格配色与字体组合，将原本共存单页面的 Chroma 和 PageIndexRAG 编辑区域重构为两套独立的导航标签页（Tabs）。
+  - 行为变化：保留原有的增删改查逻辑与 API 调用交互，单屏视野不再拥挤，更便于独立处理对应的存储空间数据。
+  - 配置变化：无新增/删除配置项。
+
 ### 2026-03-21
 
 - **无 Qdrant 架构收敛（已落地）**:
@@ -929,18 +957,18 @@ douya/
 
 已实现接口：
 
-1. `POST /api/rag/page-index/ingest`
-2. `POST /api/rag/page-index/query`
-3. `GET /api/rag/page-index/status`
-4. `GET /health`
+1. `[已废弃] POST /api/rag/page-index/ingest`
+2. `[已废弃] POST /api/rag/page-index/query`
+3. `[已废弃] GET /api/rag/page-index/status`
+4. `GET /health`（默认仅返回 `deprecated/script-only` 状态）
 
-使用 conda 启动：
+脚本模式（推荐）：
 
 ```bash
 cd apps/python-rag
 conda env create -f environment.yml
 conda activate douya-page-index-rag
-./scripts/run_dev.sh
+# 直接由 Java 通过脚本调用，无需启动 HTTP 服务
 ```
 
 说明：
@@ -952,35 +980,70 @@ conda activate douya-page-index-rag
 5. 已接入可选生成器 provider（默认 extractive，可切换 OpenAI-compatible，失败自动降级）。
 6. 方案归档见：`docs/retrieval/personal-kb-no-qdrant-archive.md`
 
-### 11. Java -> Python PageIndexRAG 代理（已实现）
+### 11. Java -> PythonTool PageIndexRAG 脚本转发（已实现）
 
-为保持当前 Spring Boot 主服务为统一入口，已增加 Java 侧代理接口转发到 Python `apps/python-rag` 服务。
+为保持当前 Spring Boot 主服务为统一入口，Java 侧接口保留不变，但内部已改为调用本地 Python 脚本，不再转发到 Python HTTP 服务。
 
 Java 侧接口（统一走当前服务 `:8787/api`）：
 
 1. `GET /api/douya/page-index-rag/status`
 2. `POST /api/douya/page-index-rag/ingest`
 3. `POST /api/douya/page-index-rag/query`
+4. `POST /api/douya/page-index-rag/ingest/file`（`multipart/form-data`）
+5. `POST /api/douya/page-index-rag/assets/upload-image`（`application/json`，供 Python OCR 管道调用）
 
 配置（`application-dev.yml`）：
 
 ```yaml
 page-index-rag:
-  enabled: true
-  base-url: http://127.0.0.1:9000
-  connect-timeout: 3s
-  read-timeout: 30s
-  python-command: python3
+  enabled: ${PAGE_INDEX_RAG_ENABLED:true}
+  python-command: ${PAGE_INDEX_RAG_PYTHON_COMMAND:python3}
   python-executable: ${PAGE_INDEX_RAG_PYTHON_EXECUTABLE:/opt/anaconda3/envs/douya-page-index-rag/bin/python}
-  query-script: apps/python-rag/scripts/page_index_query.py
-  python-timeout-seconds: 30
+  query-script: ${PAGE_INDEX_RAG_QUERY_SCRIPT:apps/python-rag/scripts/page_index_query.py}
+  ingest-script: ${PAGE_INDEX_RAG_INGEST_SCRIPT:apps/python-rag/scripts/page_index_ingest.py}
+  ingest-file-script: ${PAGE_INDEX_RAG_INGEST_FILE_SCRIPT:apps/python-rag/scripts/page_index_ingest_file.py}
+  status-script: ${PAGE_INDEX_RAG_STATUS_SCRIPT:apps/python-rag/scripts/page_index_status.py}
+  data-file: ${PAGE_INDEX_RAG_DATA_FILE:}
+  python-timeout-seconds: ${PAGE_INDEX_RAG_PYTHON_TIMEOUT_SECONDS:60}
+```
+
+Python OCR/图片资产相关环境变量（可选）：
+
+```bash
+export PAGE_INDEX_RAG_OCR_MIN_TEXT_CHARS=20
+export PAGE_INDEX_RAG_OCR_RENDER_SCALE=2.0
+export PAGE_INDEX_RAG_OSS_UPLOAD_ENABLED=true
+export PAGE_INDEX_RAG_OSS_UPLOAD_URL=http://127.0.0.1:8787/api/douya/page-index-rag/assets/upload-image
+export PAGE_INDEX_RAG_OSS_UPLOAD_TIMEOUT_SECONDS=12
 ```
 
 联调顺序建议：
 
-1. 先启动 Python 服务（`apps/python-rag`，默认 `9000`）
-2. 再启动 Java 服务（当前项目，默认 `8787`）
-3. 通过 Java 代理接口发起请求，便于后续统一鉴权、审计和流量治理
+1. 准备好 Python 运行环境（conda/venv，且脚本依赖安装完成）
+2. 启动 Java 服务（当前项目，默认 `8787`）
+3. 通过 Java 接口发起请求，由 Java 进程本地调用 Python 脚本
+
+文件入库示例（走 Java 代理）：
+
+```bash
+curl -X POST 'http://127.0.0.1:8787/api/douya/page-index-rag/ingest/file' \
+  -F 'file=@/path/to/sample.pdf' \
+  -F 'doc_name=sample.pdf' \
+  -F 'version=v1' \
+  -F 'metadata={"source":"java-proxy-upload"}'
+```
+
+图片上传示例（供 Python OCR 管道单独联调）：
+
+```bash
+curl -X POST 'http://127.0.0.1:8787/api/douya/page-index-rag/assets/upload-image' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "file_name": "sample_p1.png",
+    "document_name": "sample",
+    "content_base64": "<BASE64_IMAGE_BYTES>"
+  }'
+```
 
 ### 12. EatingMaster `public_search` 接入 PageIndexRAG（已实现）
 

@@ -24,6 +24,11 @@ public class DocumentSplitProperties {
     private String pythonCommand = "python3";
 
     /**
+     * 固定 Python 可执行文件路径（可选，优先级高于 pythonCommand）。
+     */
+    private String pythonExecutable;
+
+    /**
      * Python 切分脚本路径（相对项目根目录）
      */
     private String pythonScript = "apps/split-document/scripts/split_document.py";

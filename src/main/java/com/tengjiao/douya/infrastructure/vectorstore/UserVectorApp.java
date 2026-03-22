@@ -3,8 +3,10 @@ package com.tengjiao.douya.infrastructure.vectorstore;
 
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.ai.chroma.vectorstore.ChromaApi;
 import org.springframework.ai.document.Document;
+import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Component;
@@ -14,6 +16,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 用户向量服务 - 吃饭大师场景
@@ -25,12 +29,20 @@ import java.util.Map;
 @Slf4j
 @Component
 public class UserVectorApp {
+    private static final String TENANT = "SpringAiTenant";
+    private static final String DATABASE = "SpringAiDatabase";
     private final VectorStore chromaVectorStore;
     private final ChromaApi chromaApi;
+    private final EmbeddingModel embeddingModel;
 
-    public UserVectorApp(VectorStore chromaVectorStore, ChromaApi chromaApi) {
+    public UserVectorApp(
+            VectorStore chromaVectorStore,
+            ChromaApi chromaApi,
+            @Qualifier("dashscopeEmbeddingModel") EmbeddingModel embeddingModel
+    ) {
         this.chromaVectorStore = chromaVectorStore;
         this.chromaApi = chromaApi;
+        this.embeddingModel = embeddingModel;
     }
 
     /**
@@ -239,11 +251,9 @@ public class UserVectorApp {
     public Map<String, Object> getChromaRawData(String collectionName, Integer limit, Integer offset) {
         int k = (limit != null && limit > 0) ? limit : 100;
         int o = (offset != null && offset >= 0) ? offset : 0;
-        String tenant = "SpringAiTenant";
-        String database = "SpringAiDatabase";
 
         // 1. 先获取 collection 以获得 ID
-        ChromaApi.Collection collection = chromaApi.getCollection(tenant, database, collectionName);
+        ChromaApi.Collection collection = chromaApi.getCollection(TENANT, DATABASE, collectionName);
         if (collection == null) {
             return Map.of("error", "Collection not found: " + collectionName);
         }
@@ -260,7 +270,7 @@ public class UserVectorApp {
                         ChromaApi.QueryRequest.Include.EMBEDDINGS));
 
         // 3. 调用底层 API
-        ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(tenant, database, collection.id(),
+        ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(TENANT, DATABASE, collection.id(),
                 getRequest);
 
         // 4. 组装结果，尽可能贴合用户展示的格式
@@ -273,7 +283,7 @@ public class UserVectorApp {
 
             // 补充总数
             try {
-                long total = chromaApi.countEmbeddings(tenant, database, collection.id());
+                long total = chromaApi.countEmbeddings(TENANT, DATABASE, collection.id());
                 result.put("total", total);
             } catch (Exception e) {
                 result.put("total", response.ids().size()); // 降级处理
@@ -282,10 +292,196 @@ public class UserVectorApp {
         return result;
     }
 
+    /**
+     * 为仪表盘提供可分页、可过滤的向量分片列表。
+     * 说明：当前实现会全量扫描后再做过滤，适用于个人知识库/中小规模数据集。
+     */
+    public Map<String, Object> getDashboardItems(
+            String collectionName,
+            Integer limit,
+            Integer offset,
+            String keyword,
+            String documentName
+    ) {
+        int pageSize = (limit != null && limit > 0) ? limit : 20;
+        int pageOffset = (offset != null && offset >= 0) ? offset : 0;
+
+        ChromaApi.Collection collection = chromaApi.getCollection(TENANT, DATABASE, collectionName);
+        if (collection == null) {
+            return Map.of("error", "Collection not found: " + collectionName);
+        }
+
+        List<Map<String, Object>> allItems = new ArrayList<>();
+        int batchSize = 500;
+        int scanOffset = 0;
+        boolean hasMore = true;
+
+        while (hasMore) {
+            ChromaApi.GetEmbeddingsRequest request = new ChromaApi.GetEmbeddingsRequest(
+                    null,
+                    null,
+                    batchSize,
+                    scanOffset,
+                    List.of(ChromaApi.QueryRequest.Include.DOCUMENTS,
+                            ChromaApi.QueryRequest.Include.METADATAS));
+            ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(TENANT, DATABASE, collection.id(), request);
+            List<String> ids = response == null ? List.of() : response.ids();
+            List<String> documents = response == null ? List.of() : response.documents();
+            List<Map<String, String>> metadatas = response == null ? List.of() : response.metadata();
+
+            if (ids == null || ids.isEmpty()) {
+                hasMore = false;
+                continue;
+            }
+
+            for (int i = 0; i < ids.size(); i++) {
+                String id = ids.get(i);
+                String content = (documents != null && i < documents.size()) ? documents.get(i) : "";
+                Map<String, Object> metadata = new LinkedHashMap<>();
+                if (metadatas != null && i < metadatas.size() && metadatas.get(i) != null) {
+                    metadata.putAll(metadatas.get(i));
+                }
+                if (!matchesItem(id, content, metadata, keyword, documentName)) {
+                    continue;
+                }
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("id", id);
+                item.put("content", content);
+                item.put("metadata", metadata);
+                allItems.add(item);
+            }
+
+            scanOffset += ids.size();
+            if (ids.size() < batchSize) {
+                hasMore = false;
+            }
+        }
+
+        int total = allItems.size();
+        int from = Math.min(pageOffset, total);
+        int to = Math.min(from + pageSize, total);
+        List<Map<String, Object>> pageItems = allItems.subList(from, to);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("collectionName", collectionName);
+        result.put("limit", pageSize);
+        result.put("offset", pageOffset);
+        result.put("total", total);
+        result.put("items", pageItems);
+        return result;
+    }
+
+    public Map<String, Object> getChunkById(String collectionName, String id) {
+        if (id == null || id.isBlank()) {
+            return Map.of("error", "id 不能为空");
+        }
+        ChromaApi.Collection collection = chromaApi.getCollection(TENANT, DATABASE, collectionName);
+        if (collection == null) {
+            return Map.of("error", "Collection not found: " + collectionName);
+        }
+
+        ChromaApi.GetEmbeddingsRequest request = new ChromaApi.GetEmbeddingsRequest(
+                List.of(id),
+                null,
+                1,
+                0,
+                List.of(ChromaApi.QueryRequest.Include.DOCUMENTS,
+                        ChromaApi.QueryRequest.Include.METADATAS));
+        ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(TENANT, DATABASE, collection.id(), request);
+
+        if (response == null || response.ids() == null || response.ids().isEmpty()) {
+            return Map.of("error", "未找到对应向量分片: " + id);
+        }
+
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("id", response.ids().getFirst());
+        item.put("content", response.documents() == null || response.documents().isEmpty() ? "" : response.documents().getFirst());
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (response.metadata() != null && !response.metadata().isEmpty() && response.metadata().getFirst() != null) {
+            metadata.putAll(response.metadata().getFirst());
+        }
+        item.put("metadata", metadata);
+        return item;
+    }
+
+    public Map<String, Object> updateChunkById(
+            String collectionName,
+            String id,
+            String content,
+            Map<String, Object> patchMetadata
+    ) {
+        if (id == null || id.isBlank()) {
+            return Map.of("error", "id 不能为空");
+        }
+        if (content == null || content.isBlank()) {
+            return Map.of("error", "content 不能为空");
+        }
+
+        ChromaApi.Collection collection = chromaApi.getCollection(TENANT, DATABASE, collectionName);
+        if (collection == null) {
+            return Map.of("error", "Collection not found: " + collectionName);
+        }
+
+        Map<String, Object> existing = getChunkById(collectionName, id);
+        if (existing.containsKey("error")) {
+            return existing;
+        }
+
+        Map<String, Object> mergedMetadata = new LinkedHashMap<>();
+        Object existingMetadata = existing.get("metadata");
+        if (existingMetadata instanceof Map<?, ?> map) {
+            map.forEach((k, v) -> {
+                if (k != null) {
+                    mergedMetadata.put(String.valueOf(k), v);
+                }
+            });
+        }
+        if (patchMetadata != null) {
+            patchMetadata.forEach((k, v) -> {
+                if (k != null) {
+                    mergedMetadata.put(k, v);
+                }
+            });
+        }
+        mergedMetadata.put("kb_last_edit_at", System.currentTimeMillis());
+        mergedMetadata.putIfAbsent("kb_edit_token", UUID.randomUUID().toString());
+
+        float[] embedding = embeddingModel.embed(content);
+        ChromaApi.AddEmbeddingsRequest request = new ChromaApi.AddEmbeddingsRequest(
+                id,
+                embedding,
+                mergedMetadata,
+                content
+        );
+        chromaApi.upsertEmbeddings(TENANT, DATABASE, collection.id(), request);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "SUCCESS");
+        result.put("id", id);
+        result.put("collectionName", collectionName);
+        result.put("content", content);
+        result.put("metadata", mergedMetadata);
+        return result;
+    }
+
+    public Map<String, Object> deleteById(String collectionName, String id) {
+        if (id == null || id.isBlank()) {
+            return Map.of("error", "id 不能为空");
+        }
+        ChromaApi.Collection collection = chromaApi.getCollection(TENANT, DATABASE, collectionName);
+        if (collection == null) {
+            return Map.of("error", "Collection not found: " + collectionName);
+        }
+        int status = chromaApi.deleteEmbeddings(TENANT, DATABASE, collection.id(), new ChromaApi.DeleteEmbeddingsRequest(List.of(id)));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "SUCCESS");
+        result.put("apiStatus", status);
+        result.put("deletedId", id);
+        return result;
+    }
+
     public Map<String, Object> deleteAll(String collectionName) {
-        String tenant = "SpringAiTenant";
-        String database = "SpringAiDatabase";
-        ChromaApi.Collection collection = chromaApi.getCollection(tenant, database, collectionName);
+        ChromaApi.Collection collection = chromaApi.getCollection(TENANT, DATABASE, collectionName);
         if (collection == null) return Map.of("error", "Collection not found");
 
         int totalDeleted = 0;
@@ -293,12 +489,12 @@ public class UserVectorApp {
         while (hasMore) {
             ChromaApi.GetEmbeddingsRequest getRequest = new ChromaApi.GetEmbeddingsRequest(
                     null, null, 100, 0, List.of());
-            ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(tenant, database, collection.id(), getRequest);
+            ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(TENANT, DATABASE, collection.id(), getRequest);
             List<String> ids = (response != null) ? response.ids() : List.of();
             if (ids.isEmpty()) {
                 hasMore = false;
             } else {
-                chromaApi.deleteEmbeddings(tenant, database, collection.id(), new ChromaApi.DeleteEmbeddingsRequest(ids));
+                chromaApi.deleteEmbeddings(TENANT, DATABASE, collection.id(), new ChromaApi.DeleteEmbeddingsRequest(ids));
                 totalDeleted += ids.size();
             }
         }
@@ -313,11 +509,8 @@ public class UserVectorApp {
      * @return 删除结果报告
      */
     public Map<String, Object> deleteByDocumentName(String collectionName, String documentName) {
-        String tenant = "SpringAiTenant";
-        String database = "SpringAiDatabase";
-
         // 1. 获取 Collection
-        ChromaApi.Collection collection = chromaApi.getCollection(tenant, database, collectionName);
+        ChromaApi.Collection collection = chromaApi.getCollection(TENANT, DATABASE, collectionName);
         if (collection == null) {
             return Map.of("error", "Collection not found: " + collectionName);
         }
@@ -336,14 +529,14 @@ public class UserVectorApp {
                     0,
                     List.of(ChromaApi.QueryRequest.Include.METADATAS));
 
-            ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(tenant, database, collection.id(), getRequest);
+            ChromaApi.GetEmbeddingResponse response = chromaApi.getEmbeddings(TENANT, DATABASE, collection.id(), getRequest);
             List<String> idsToDelete = (response != null) ? response.ids() : new ArrayList<>();
 
             if (idsToDelete == null || idsToDelete.isEmpty()) {
                 hasMore = false;
             } else {
                 ChromaApi.DeleteEmbeddingsRequest deleteRequest = new ChromaApi.DeleteEmbeddingsRequest(idsToDelete);
-                chromaApi.deleteEmbeddings(tenant, database, collection.id(), deleteRequest);
+                chromaApi.deleteEmbeddings(TENANT, DATABASE, collection.id(), deleteRequest);
                 totalDeleted += idsToDelete.size();
                 // 如果返回的 ID 数量小于 limit，说明删完了；否则可能还有（虽然删除后 offset 会变，但我们这里 where 条件依然有效）
                 if (idsToDelete.size() < limit) {
@@ -365,11 +558,8 @@ public class UserVectorApp {
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> cleanupDuplicates(String collectionName) {
-        String tenant = "SpringAiTenant";
-        String database = "SpringAiDatabase";
-
         // 1. 获取 Collection 信息
-        ChromaApi.Collection collection = chromaApi.getCollection(tenant, database, collectionName);
+        ChromaApi.Collection collection = chromaApi.getCollection(TENANT, DATABASE, collectionName);
         if (collection == null) {
             return Map.of("error", "Collection not found: " + collectionName);
         }
@@ -405,7 +595,7 @@ public class UserVectorApp {
         int deleteApiStatus = 0;
         if (!idsToDelete.isEmpty()) {
             ChromaApi.DeleteEmbeddingsRequest deleteRequest = new ChromaApi.DeleteEmbeddingsRequest(idsToDelete);
-            deleteApiStatus = chromaApi.deleteEmbeddings(tenant, database, collection.id(), deleteRequest);
+            deleteApiStatus = chromaApi.deleteEmbeddings(TENANT, DATABASE, collection.id(), deleteRequest);
         }
 
         // 5. 生成报告
@@ -417,6 +607,30 @@ public class UserVectorApp {
         report.put("deleteApiStatus", deleteApiStatus);
         report.put("message", idsToDelete.isEmpty() ? "No duplicates found." : "Cleanup completed successfully.");
         return report;
+    }
+
+    private boolean matchesItem(
+            String id,
+            String content,
+            Map<String, Object> metadata,
+            String keyword,
+            String documentName
+    ) {
+        if (documentName != null && !documentName.isBlank()) {
+            Object metaDocName = metadata.get("documentName");
+            String docName = metaDocName == null ? "" : String.valueOf(metaDocName);
+            if (!docName.equalsIgnoreCase(documentName.trim())) {
+                return false;
+            }
+        }
+        if (keyword == null || keyword.isBlank()) {
+            return true;
+        }
+        String kw = keyword.trim().toLowerCase();
+        String metadataText = String.valueOf(metadata).toLowerCase();
+        return Objects.toString(id, "").toLowerCase().contains(kw)
+                || Objects.toString(content, "").toLowerCase().contains(kw)
+                || metadataText.contains(kw);
     }
 
 }

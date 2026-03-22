@@ -22,6 +22,12 @@ import java.util.stream.Collectors;
 @Slf4j
 public class PageIndexRagSearchTool {
 
+    private static final String ENV_PYTHON_COMMAND = "PAGE_INDEX_RAG_PYTHON_COMMAND";
+    private static final String ENV_PYTHON_EXECUTABLE = "PAGE_INDEX_RAG_PYTHON_EXECUTABLE";
+    private static final String ENV_QUERY_SCRIPT = "PAGE_INDEX_RAG_QUERY_SCRIPT";
+    private static final String ENV_DATA_FILE = "PAGE_INDEX_RAG_DATA_FILE";
+    private static final String ENV_TIMEOUT_SECONDS = "PAGE_INDEX_RAG_PYTHON_TIMEOUT_SECONDS";
+
     private final PageIndexRagProperties properties;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -68,7 +74,8 @@ public class PageIndexRagSearchTool {
     }
 
     private Map<String, Object> runPythonQuery(Map<String, Object> payload) throws Exception {
-        Path scriptPath = resolveScriptPath(properties.getQueryScript());
+        Map<String, Object> requestPayload = enrichDataFile(payload);
+        Path scriptPath = resolveScriptPath(resolveEnv(ENV_QUERY_SCRIPT, properties.getQueryScript()));
         if (!Files.exists(scriptPath)) {
             throw new IllegalStateException("PageIndexRAG 查询脚本不存在: " + scriptPath);
         }
@@ -77,11 +84,11 @@ public class PageIndexRagSearchTool {
         Process process = processBuilder.start();
 
         try (var outputStream = process.getOutputStream()) {
-            objectMapper.writeValue(outputStream, payload);
+            objectMapper.writeValue(outputStream, requestPayload);
             outputStream.flush();
         }
 
-        boolean finished = process.waitFor(properties.getPythonTimeoutSeconds(), TimeUnit.SECONDS);
+        boolean finished = process.waitFor(resolveTimeoutSeconds(), TimeUnit.SECONDS);
         if (!finished) {
             process.destroyForcibly();
             throw new IllegalStateException("PageIndexRAG 查询脚本执行超时");
@@ -102,11 +109,11 @@ public class PageIndexRagSearchTool {
 
     private List<String> buildPythonCommand(Path scriptPath) {
         List<String> cmd = new ArrayList<>();
-        String pythonExec = properties.getPythonExecutable();
+        String pythonExec = resolveEnv(ENV_PYTHON_EXECUTABLE, properties.getPythonExecutable());
         if (pythonExec != null && !pythonExec.isBlank()) {
             cmd.add(pythonExec);
         } else {
-            cmd.add(properties.getPythonCommand());
+            cmd.add(resolvePythonCommand());
         }
         cmd.add(scriptPath.toString());
         cmd.add("--mode");
@@ -120,6 +127,49 @@ public class PageIndexRagSearchTool {
             return scriptPath.normalize();
         }
         return Path.of(System.getProperty("user.dir")).resolve(scriptPath).normalize();
+    }
+
+    private long resolveTimeoutSeconds() {
+        String timeoutText = System.getenv(ENV_TIMEOUT_SECONDS);
+        if (timeoutText != null && !timeoutText.isBlank()) {
+            try {
+                long timeout = Long.parseLong(timeoutText.trim());
+                if (timeout > 0) {
+                    return timeout;
+                }
+            } catch (NumberFormatException ignored) {
+                log.warn("环境变量 {} 不是有效整数: {}", ENV_TIMEOUT_SECONDS, timeoutText);
+            }
+        }
+        return Math.max(1, properties.getPythonTimeoutSeconds());
+    }
+
+    private String resolvePythonCommand() {
+        String command = resolveEnv(ENV_PYTHON_COMMAND, properties.getPythonCommand());
+        if (command == null || command.isBlank()) {
+            return "python3";
+        }
+        return command.trim();
+    }
+
+    private Map<String, Object> enrichDataFile(Map<String, Object> payload) {
+        Map<String, Object> merged = new HashMap<>();
+        if (payload != null) {
+            merged.putAll(payload);
+        }
+        String dataFile = resolveEnv(ENV_DATA_FILE, properties.getDataFile());
+        if (dataFile != null && !dataFile.isBlank() && !merged.containsKey("data_file")) {
+            merged.put("data_file", dataFile.trim());
+        }
+        return merged;
+    }
+
+    private String resolveEnv(String envKey, String fallback) {
+        String envValue = System.getenv(envKey);
+        if (envValue != null && !envValue.isBlank()) {
+            return envValue;
+        }
+        return fallback;
     }
 
     private int normalizeTopK(Integer topK) {
