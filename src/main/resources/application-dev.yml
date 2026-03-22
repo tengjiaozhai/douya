@@ -57,6 +57,10 @@ page-index-rag:
     base-url: http://127.0.0.1:9000
     connect-timeout: 3s
     read-timeout: 30s
+    python-command: python3
+    python-executable: ${PAGE_INDEX_RAG_PYTHON_EXECUTABLE:/opt/anaconda3/envs/douya-page-index-rag/bin/python}
+    query-script: apps/python-rag/scripts/page_index_query.py
+    python-timeout-seconds: 30
 
 douya:
     document:

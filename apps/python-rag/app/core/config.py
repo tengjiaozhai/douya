@@ -28,15 +28,6 @@ class RagConfig:
 
 
 @dataclass(frozen=True)
-class QdrantConfig:
-    enabled: bool = os.getenv("QDRANT_ENABLED", "false").lower() == "true"
-    url: str = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
-    api_key: str | None = os.getenv("QDRANT_API_KEY")
-    collection: str = os.getenv("QDRANT_COLLECTION", "page_index_rag_chunks")
-    timeout: float = float(os.getenv("QDRANT_TIMEOUT", "3.0"))
-
-
-@dataclass(frozen=True)
 class GenerationConfig:
     provider: str = os.getenv("GEN_PROVIDER", "extractive")
     api_base: str = os.getenv("GEN_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
@@ -60,5 +51,4 @@ class AppSettings:
     port: int = int(os.getenv("APP_PORT", "9000"))
     data_file: Path = _default_data_file()
     rag: RagConfig = RagConfig()
-    qdrant: QdrantConfig = QdrantConfig()
     generation: GenerationConfig = GenerationConfig()

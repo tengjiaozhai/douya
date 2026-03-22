@@ -4,7 +4,7 @@
 
 - API: FastAPI (`apps/python-rag/app/api`)
 - Service: `PageIndexRagService`
-- Storage: local JSON snapshot (`StorageSnapshot`)
+- Storage: local JSON snapshot (`StorageSnapshot`, no external vector DB)
 - Retrieval: dense (hash embedding) + sparse (term overlap) + RRF fusion
 
 ## Flow
@@ -18,6 +18,6 @@
 
 ## Next
 
-- Replace local storage with Qdrant hybrid index.
+- Keep page-level parsing/citation stable and improve retrieval quality in Java + Chroma unified search path.
 - Replace heuristic rerank with cross-encoder reranker.
 - Connect generation layer for final natural answer.

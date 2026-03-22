@@ -774,6 +774,22 @@ documents/
   - 明确了 Child（200 tokens）作为向量检索单元、Parent（1200 tokens）作为 LLM 上下文注入单元的职责分离策略。
   - 补充了核心代码示例，说明 `UserVectorApp.searchSimilar` 如何在命中子块后自动提取 `parent_text` 并进行智能去重，从架构层面解决"精准检索 vs 丰富上下文"的根本矛盾。
 
+### 2026-03-21
+
+- **无 Qdrant 架构收敛（已落地）**:
+  - `apps/python-rag` 已彻底移除 Qdrant 运行时逻辑与依赖（包含配置、代码分支、`qdrant-client` 依赖）。
+  - `page-index-rag` 职责收敛为“文档解析 + 页级引用组织 + 本地 JSON 检索”，不连接外部向量数据库。
+  - `EatingMasterApp` 的 `public_search` 默认并固定走 **Java + Chroma** 检索链路，不再依赖 Python 检索路径。
+  - 新增方案归档文档：`docs/retrieval/personal-kb-no-qdrant-archive.md`。
+- **Python 脚本工具调用（已落地）**:
+  - `PageIndexRagSearchTool` 不再通过 `PageIndexRagClient` 发起 HTTP 调用，改为本地 Python 脚本调用。
+  - 新增脚本：`apps/python-rag/scripts/page_index_query.py`，支持 `--mode json-stdin`。
+  - `EatingMasterApp` 新增可选工具 `page_index_search`，用于显式触发页级引用查询（兼容能力）。
+  - 新增配置项：`page-index-rag.python-command`、`page-index-rag.python-executable`、`page-index-rag.query-script`、`page-index-rag.python-timeout-seconds`。
+  - 运行环境可固定到项目 conda 环境（推荐通过 `python-executable` 指向 `douya-page-index-rag` 环境中的 `python`）。
+  - 脚本 `apps/python-rag/scripts/page_index_query.py` 已补充详细注释，明确 stdin/stdout 契约、错误码和关键处理步骤，便于维护与排障。
+  - 脚本注释已升级为“全中文新手向讲解”，补充了每个关键步骤的“为什么这么写”和常见踩坑说明（纯注释增强，无运行行为变化）。
+
 ### 2026-02-18
 
 - **PDF 切片质量深度优化 (Chunking Optimization)**:
@@ -895,7 +911,7 @@ douya/
 ### 8. Python 实现建议（首选）
 
 1. 框架：`FastAPI + Pydantic + Uvicorn`
-2. 检索：`Qdrant (dense+sparse) + BM25 + RRF`
+2. 检索：`本地 JSON 索引 (dense+sparse+RRF)`；生产主检索链路使用 `Java + Chroma`
 3. 重排：`bge-reranker-v2-m3` 或同级 API 化模型
 4. 任务：`Celery/RQ` 处理大文档异步入库
 5. 配置：`.env + pydantic-settings`，区分 `dev/staging/prod`
@@ -907,7 +923,7 @@ douya/
 3. `M3`（1 周）：完成评测集与指标看板，按阈值调参
 4. `M4`（1 周）：灰度上线与压测优化（缓存、并发、限流）
 
-### 10. 当前实现状态（2026-03-01）
+### 10. 当前实现状态（2026-03-21）
 
 已完成 `M1` 最小可运行版本，代码路径：`apps/python-rag`。
 
@@ -931,9 +947,10 @@ conda activate douya-page-index-rag
 
 1. M1 使用本地 JSON 存储索引（便于快速验证）。
 2. M1 回答为检索拼接结果，已包含 citation 结构。
-3. M2 已接入可选 Qdrant 混合检索（通过环境变量开启，失败自动回退本地检索）。
-4. M2 已接入可选 reranker provider（默认 lexical，可切换 BGE，依赖缺失自动降级）。
-5. M2 已接入可选生成器 provider（默认 extractive，可切换 OpenAI-compatible，失败自动降级）。
+3. 已移除 Qdrant 相关逻辑与依赖，`page-index-rag` 不连接外部向量数据库。
+4. 已接入可选 reranker provider（默认 lexical，可切换 BGE，依赖缺失自动降级）。
+5. 已接入可选生成器 provider（默认 extractive，可切换 OpenAI-compatible，失败自动降级）。
+6. 方案归档见：`docs/retrieval/personal-kb-no-qdrant-archive.md`
 
 ### 11. Java -> Python PageIndexRAG 代理（已实现）
 
@@ -953,6 +970,10 @@ page-index-rag:
   base-url: http://127.0.0.1:9000
   connect-timeout: 3s
   read-timeout: 30s
+  python-command: python3
+  python-executable: ${PAGE_INDEX_RAG_PYTHON_EXECUTABLE:/opt/anaconda3/envs/douya-page-index-rag/bin/python}
+  query-script: apps/python-rag/scripts/page_index_query.py
+  python-timeout-seconds: 30
 ```
 
 联调顺序建议：
@@ -963,15 +984,20 @@ page-index-rag:
 
 ### 12. EatingMaster `public_search` 接入 PageIndexRAG（已实现）
 
-在保持现有 Supervisor 路由与工具名不变的前提下，已将 `EatingMasterApp` 的 `public_search` 工具升级为可切换模式：
+在保持现有 Supervisor 路由与工具名不变的前提下，`EatingMasterApp` 的 `public_search` 已收敛为单一路径：
 
-1. `page-index-rag.enabled=true`：`public_search` -> Python PageIndexRAG（页级引用可追溯）
-2. `page-index-rag.enabled=false`：`public_search` -> 旧版 `PublicDocumentSearchTool`（本地向量检索）
+1. `public_search` -> `PublicDocumentSearchTool`（Java + Chroma）
+2. Python `page-index-rag` 保留为页级解析与引用能力，不作为 `public_search` 主检索引擎
+
+同时提供兼容性工具：
+
+1. `page_index_search` -> 调用本地 Python 脚本 `apps/python-rag/scripts/page_index_query.py`
+2. 该工具用于“显式页级引用查询”，不替代主链路 `public_search`
 
 该改造为最小侵入方案，特点：
 
-1. 不改 Supervisor 提示词，不新增工具名，避免路由回归风险
-2. 在应用启动与调用阶段增加路由日志，便于排查检索命中与降级路径
-3. 保持当前 Agent 图结构稳定，仅替换工具实现
+1. 不改 Supervisor 提示词，主工具名 `public_search` 保持不变
+2. 在应用启动与调用阶段增加路由日志，便于排查检索命中路径
+3. 保持当前 Agent 图结构稳定，新增 `page_index_search` 仅作为兼容能力补充
 
 ## 开发者

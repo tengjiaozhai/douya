@@ -2,6 +2,8 @@
 
 `pageIndexRag` 的 Python 实现（M1 版本）。
 
+说明：当前服务不依赖外部向量数据库，使用本地 JSON 快照完成页级入库与检索。
+
 ## 当前能力（M1）
 
 - `POST /api/rag/page-index/ingest`：文档入库（页级 + 子块）
@@ -29,22 +31,6 @@ conda activate douya-page-index-rag
 ```
 
 服务默认端口：`9000`
-
-### 可选：启用 Qdrant 混合检索
-
-默认关闭。开启方式：
-
-```bash
-export QDRANT_ENABLED=true
-export QDRANT_URL=http://127.0.0.1:6333
-export QDRANT_COLLECTION=page_index_rag_chunks
-./scripts/run_dev.sh
-```
-
-说明：
-
-- 若 Qdrant 不可用，服务会自动回退本地检索，不影响接口可用性。
-- 当前仍会保留本地 JSON 快照用于状态与调试。
 
 ### 可选：启用 BGE Reranker
 
@@ -116,7 +102,7 @@ curl 'http://127.0.0.1:9000/api/rag/page-index/status'
 
 - 当前使用本地 JSON 作为索引存储，便于快速验证流程。
 - 当前回答为“检索型拼接回答”，未接入生成式 LLM。
-- M2 已支持可选 Qdrant 混合检索、可选 BGE reranker、可选 LLM 生成器（均支持自动降级）。
+- M2 方向：优化重排与生成质量，保持页面级引用能力。
 
 ## Upload File Directly
 

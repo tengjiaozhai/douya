@@ -6,7 +6,6 @@ import com.tengjiao.douya.application.hook.CombinedMemoryHook;
 import com.tengjiao.douya.application.hook.PreferenceLearningHook;
 import com.tengjiao.douya.application.interceptors.UserPreferInterceptors;
 import com.tengjiao.douya.infrastructure.config.PageIndexRagProperties;
-import com.tengjiao.douya.infrastructure.external.pageindexrag.PageIndexRagClient;
 import com.tengjiao.douya.infrastructure.persistence.PostgresStore;
 import com.tengjiao.douya.infrastructure.tool.MemorySearchTool;
 import com.tengjiao.douya.infrastructure.tool.PageIndexRagSearchTool;
@@ -112,13 +111,12 @@ public class EatingMasterApp {
     private final ChatModel readUnderstandModel;
     private final ChatModel douBaoTransitDeepseek;
     private final PageIndexRagProperties pageIndexRagProperties;
-    private final PageIndexRagClient pageIndexRagClient;
 
     private final Store memoryStore = new MemoryStore();
 
     public EatingMasterApp(ChatModel eatingMasterModel, ChatModel structTransformModel, ChatModel summaryChatModel, Store douyaDatabaseStore,
                            UserVectorApp userVectorApp, ChatModel readUnderstandModel, ChatModel douBaoTransitDeepseek,
-                           PageIndexRagProperties pageIndexRagProperties, PageIndexRagClient pageIndexRagClient) {
+                           PageIndexRagProperties pageIndexRagProperties) {
         this.eatingMasterModel = eatingMasterModel;
         this.structTransformModel = structTransformModel;
         this.summaryChatModel = summaryChatModel;
@@ -127,7 +125,6 @@ public class EatingMasterApp {
         this.readUnderstandModel = readUnderstandModel;
         this.douBaoTransitDeepseek = douBaoTransitDeepseek;
         this.pageIndexRagProperties = pageIndexRagProperties;
-        this.pageIndexRagClient = pageIndexRagClient;
     }
 
     /**
@@ -150,26 +147,29 @@ public class EatingMasterApp {
                 .inputType(MemorySearchTool.Request.class)
                 .build();
 
-        // 创建公共文档搜索工具（优先 PageIndexRAG，失败时可通过配置回退旧向量检索）
-        ToolCallback publicDocToolCallback;
+        // 创建公共文档搜索工具：统一走 Java + Chroma 检索链路。
+        log.info("[Multi-Agent] public_search route=java_chroma");
+        PublicDocumentSearchTool publicDocTool = new PublicDocumentSearchTool(userVectorApp, douBaoTransitDeepseek);
+        ToolCallback publicDocToolCallback = FunctionToolCallback.builder("public_search",
+                        publicDocTool::search)
+                .description("检索系统公共知识库、官方手册、菜谱指南或操作说明。默认走 Java + Chroma 检索链路。")
+                .inputType(PublicDocumentSearchTool.Request.class)
+                .toolMetadata(DefaultToolMetadata.builder().returnDirect(true).build())
+                .build();
+
+        // 可选：通过 Python Tool 脚本执行 page-index-rag 查询（兼容用途，不替代主检索链路）。
+        List<ToolCallback> toolCallbacks = new ArrayList<>();
+        toolCallbacks.add(ragToolCallback);
+        toolCallbacks.add(publicDocToolCallback);
         if (pageIndexRagProperties.isEnabled()) {
-            log.info("[Multi-Agent] public_search route=page_index_rag baseUrl={}", pageIndexRagProperties.getBaseUrl());
-            PageIndexRagSearchTool pageIndexTool = new PageIndexRagSearchTool(pageIndexRagClient);
-            publicDocToolCallback = FunctionToolCallback.builder("public_search",
+            PageIndexRagSearchTool pageIndexTool = new PageIndexRagSearchTool(pageIndexRagProperties);
+            ToolCallback pageIndexToolCallback = FunctionToolCallback.builder("page_index_search",
                             pageIndexTool::search)
-                    .description("检索系统公共知识库、官方手册、菜谱指南或操作说明。优先走 PageIndexRAG 页级检索并返回可追溯引用。")
+                    .description("调用本地 Python 脚本执行 PageIndexRAG 页级查询，返回引用信息。")
                     .inputType(PageIndexRagSearchTool.Request.class)
                     .toolMetadata(DefaultToolMetadata.builder().returnDirect(true).build())
                     .build();
-        } else {
-            log.info("[Multi-Agent] public_search route=legacy_vectorstore");
-            PublicDocumentSearchTool publicDocTool = new PublicDocumentSearchTool(userVectorApp, douBaoTransitDeepseek);
-            publicDocToolCallback = FunctionToolCallback.builder("public_search",
-                            publicDocTool::search)
-                    .description("检索系统公共知识库、官方手册、菜谱指南或操作说明。当用户询问专业知识、公共资源或需要查找带图片的官方资料时使用。")
-                    .inputType(PublicDocumentSearchTool.Request.class)
-                    .toolMetadata(DefaultToolMetadata.builder().returnDirect(true).build())
-                    .build();
+            toolCallbacks.add(pageIndexToolCallback);
         }
 
         // 创建用户偏好注入拦截器 (由 userId 驱动)
@@ -177,7 +177,7 @@ public class EatingMasterApp {
 
         // 创建各类智能体
         EatingMasterAgent eatingMasterAgentObj = new EatingMasterAgent(eatingMasterModel,
-                List.of(ragToolCallback, publicDocToolCallback),
+                toolCallbacks,
                 List.of(preferenceLearningHook, combinedMemoryHook),
                 List.of(userPreferInterceptor));
         ReactAgent eatingMasterAgent = eatingMasterAgentObj.build();

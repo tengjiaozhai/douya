@@ -32,7 +32,6 @@ from app.models.schemas import (
     utc_now_iso,
 )
 from app.storage.repository import JsonRepository
-from app.storage.qdrant_store import QdrantChunkStore
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +46,11 @@ class PageIndexRagService:
         self,
         repo: JsonRepository,
         rag_config: RagConfig,
-        qdrant_store: QdrantChunkStore | None = None,
         reranker: PageReranker | None = None,
         generator: AnswerGenerator | None = None,
     ) -> None:
         self.repo = repo
         self.cfg = rag_config
-        self.qdrant_store = qdrant_store
         self.reranker = reranker
         self.generator = generator
 
@@ -85,9 +82,6 @@ class PageIndexRagService:
 
         snapshot.documents[doc_id] = doc
         all_new_chunks: list[StoredChunk] = []
-
-        if self.qdrant_store is not None:
-            self.qdrant_store.delete_doc_chunks(doc_id)
 
         for idx, page_text in enumerate(pages, start=1):
             page_id = f"{doc_id}:p{idx}"
@@ -124,8 +118,6 @@ class PageIndexRagService:
 
         snapshot.updated_at = now
         self.repo.save(snapshot)
-        if self.qdrant_store is not None:
-            self.qdrant_store.upsert_chunks(all_new_chunks)
         return IngestResponse(
             doc_id=doc_id,
             version=req.version,
@@ -283,20 +275,6 @@ class PageIndexRagService:
         q_vector: list[float],
         q_terms: dict[str, float],
     ) -> tuple[dict[str, float], str]:
-        if self.qdrant_store is not None:
-            try:
-                scores = self.qdrant_store.hybrid_search(
-                    q_dense=q_vector,
-                    q_sparse_terms=q_terms,
-                    dense_top_k=self.cfg.dense_top_k,
-                    sparse_top_k=self.cfg.sparse_top_k,
-                )
-                return scores, "qdrant_hybrid"
-            except Exception:
-                # Fallback to local retrieval if qdrant query fails.
-                logger.warning("retrieval_fallback_to_local reason=qdrant_error")
-                pass
-
         chunks = list(snapshot.chunks.values())
         all_sparse_docs = [c.sparse_terms for c in chunks]
         idf = build_idf(all_sparse_docs)
